@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.3 (2026-09-13)
+- Cleanup: removed the superseded STAGE2 plan doc, merged the duplicate
+  DoH/public-DNS constant, dropped the unused `run(check)` param and stale
+  docstrings, removed stale VM snaps/logs (~3 GB)
+- Tests: revert-under-FINAL now really invokes the command (expects exit 4);
+  FORTRESS statuses updated to done
+
 ## 0.1.2 (2026-09-13)
 - VPN safety: killer ignores system paths (`/usr`, `/opt`), so bundled helpers
   like AmneziaVPN's openvpn survive package updates; path-pinned allowlist
