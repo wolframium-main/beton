@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# mkinitcpio install 'beton': hosts.block + restore-скрипт + systemd-юнит.
+# build() function for mkinitcpio. Installed by finalize.sh (VM only).
+build() {
+    add_file "/etc/beton/hosts.block" "/etc/beton/hosts.block"
+    add_file "/usr/bin/beton-restore" "/usr/bin/beton-restore" 0755
+    add_systemd_unit "beton-restore.service"
+    # add_systemd_unit кладёт файл, но wants-симлинк делаем явно —
+    # иначе юнит не стартует (поймано в VM).
+    add_symlink "/etc/systemd/system/initrd-switch-root.target.wants/beton-restore.service" \
+        "/etc/systemd/system/beton-restore.service"
+}
+
+help() {
+    cat <<'HELPEOF'
+beton: restores DNS block into sysroot before switch_root (systemd unit)
+HELPEOF
+}

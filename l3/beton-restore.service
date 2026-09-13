@@ -1,0 +1,15 @@
+[Unit]
+Description=beton early hosts restore (before switch-root)
+DefaultDependencies=no
+After=sysroot.mount
+Before=initrd-root-fs.target initrd-switch-root.target
+ConditionPathIsMountPoint=/sysroot
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/beton-restore
+RemainAfterExit=yes
+StandardOutput=kmsg+console
+
+[Install]
+WantedBy=initrd-switch-root.target

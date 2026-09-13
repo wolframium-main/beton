@@ -1,0 +1,10 @@
+#!/bin/sh
+# mkinitcpio hook 'beton': раннее восстановление hosts через systemd-юнит
+# (run_latehook под systemd-initramfs НЕ вызывается — проверено в VM).
+# run_latehook оставлен как fallback для udev-варианта.
+run_latehook() {
+    if [ -f /etc/beton/hosts.block ] && ! grep -q ">>> BETON >>>" /new_root/etc/hosts 2>/dev/null; then
+        mount -o remount,rw /new_root 2>/dev/null || true
+        cat /etc/beton/hosts.block >> /new_root/etc/hosts 2>/dev/null || true
+    fi
+}

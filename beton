@@ -1,0 +1,890 @@
+#!/usr/bin/env python3
+"""beton — невидимый сторож. Одна команда блокирует сайты навсегда (MVP).
+
+Принцип: в обычной жизни его нет. Убивает только атаку на блок.
+MVP безопасный: всё обратимо через `beton revert-for-testing`.
+Финальная неснимаемость (verity+SecureBoot+уничтожение ключа) — только Stage 2
+флагом --final-irreversible, который в MVP заблокирован.
+
+Использование (простое):
+  sudo ./beton                      # интерактив: спросит сайты и всё сделает сам
+  sudo ./beton block youtube.com tiktok.com --yes-i-understand-this-is-forever
+  ./beton dry-run youtube.com       # ничего не меняет, только показывает план
+  sudo ./beton status
+  sudo ./beton enforce              # молча восстановить (вызывает systemd-таймер)
+  sudo ./beton revert-for-testing   # ТОЛЬКО для тестов в VM, в финале будет удалено
+
+Зависимости: только Python stdlib. Система: Arch Linux, nftables, systemd.
+"""
+from __future__ import annotations
+import argparse
+import datetime
+import json
+import os
+import shutil
+import socket
+import subprocess
+import sys
+import time
+
+APP = "beton"
+VERSION = "0.1.0"
+HOSTS = "/etc/hosts"
+STATE_DIR = "/var/lib/beton"
+DOMAINS_FILE = os.path.join(STATE_DIR, "domains.txt")
+BACKUP_ROOT = STATE_DIR
+NFT_RULES = "/etc/beton/rules.nft"
+BIN_DST = "/usr/local/bin/beton"
+SERVICE = "/etc/systemd/system/beton-enforce.service"
+TIMER = "/etc/systemd/system/beton-enforce.timer"
+PACMAN_HOOK = "/etc/pacman.d/hooks/90-beton.hook"
+LOG = "/var/log/beton.log"
+
+# Флаг финализации: ставит только l3/finalize.sh в VM-церемонии.
+# После него revert-for-testing мёртв: снять можно лишь переустановкой.
+FINAL_FLAG = "/etc/beton/FINAL"
+
+
+def is_final() -> bool:
+    return os.path.exists(FINAL_FLAG)
+
+MARK_BEGIN = "# >>> BETON >>>"
+MARK_END = "# <<< BETON <<<"
+
+# Известные DoH-терминалы, блокируем только их :443 + DoT 853.
+# Обычный HTTPS не трогаем — сторож невидим для остального.
+DOH_IPS = ["1.1.1.1", "1.0.0.1", "8.8.8.8", "8.8.4.4", "9.9.9.9", "149.112.112.112"]
+
+# Стоп-лист: закрытие этих баз ломает пол-интернета (общий CDN/инфра).
+# Требует отдельный флаг --i-know-this-breaks-half-internet.
+DANGEROUS_BASES = {
+    "google.com", "gstatic.com", "googleapis.com", "gvt1.com",
+    "cloudflare.com", "cloudflare-dns.com", "amazonaws.com", "microsoft.com",
+    "apple.com", "fbcdn.net",
+}
+
+# Процессы-обходы: убиваются только если бинарник появился ПОСЛЕ установки
+# (т.е. поставлен ради обхода) и его нет в allowlist. Рабочее, стоявшее до нас, живет.
+BYPASS_PROC_NAMES = {
+    "tor", "torsocks", "openvpn",
+    "wireguard", "wg-quick",
+    "v2ray", "xray", "sing-box", "shadowsocks-rust", "sslh",
+    "outline-client", "protonvpn", "mullvad-vpn",
+}
+ALLOWLIST_PROCS_FILE = os.path.join(STATE_DIR, "allowlist-procs.txt")
+TAMPER_COUNT_FILE = os.path.join(STATE_DIR, "tamper.count")
+PUNISH_FLAG_FILE = os.path.join(STATE_DIR, "punish-until")
+PUNISH_QUIC_NFT = "/etc/beton/rules-punish.nft"
+
+CHROMIUM_POLICY_DIRS = [
+    "/etc/chromium/policies/managed",
+    "/etc/opt/chrome/policies/managed",
+    "/etc/brave/policies/managed",
+    "/etc/vivaldi/policies/managed",
+    "/etc/opera/policies/managed",
+]
+FIREFOX_POLICY = "/usr/lib/firefox/distribution/policies.json"
+FIREFOX_POLICIES = [
+    "/usr/lib/firefox/distribution/policies.json",
+    "/usr/lib/firefox-esr/distribution/policies.json",
+]
+
+# Хардкод-DNS: убиваем обход через вшитый 8.8.8.8/1.1.1.1 в приложении.
+# Системный резолвер по DHCP продолжает работать — остальное не трогаем.
+PUBLIC_DNS_IPS = ["1.1.1.1", "1.0.0.1", "8.8.8.8", "8.8.4.4", "9.9.9.9", "149.112.112.112"]
+
+FOREVER_PHRASE = "Я ПОНИМАЮ ЧТО ОБРАТНО ТОЛЬКО ЧЕРЕЗ ПЕРЕУСТАНОВКУ"
+
+
+def log(msg: str) -> None:
+    try:
+        with open(LOG, "a", encoding="utf-8") as f:
+            f.write(f"{datetime.datetime.now().isoformat(timespec='seconds')} {msg}\n")
+    except OSError:
+        pass
+
+
+def is_root() -> bool:
+    return os.geteuid() == 0
+
+
+def run(cmd: list[str], check: bool = False) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, capture_output=True, text=True)
+
+
+def normalize_domain(raw: str) -> str:
+    d = raw.strip().lower()
+    for p in ("https://", "http://"):
+        if d.startswith(p):
+            d = d[len(p):]
+    d = d.split("/")[0].split(":")[0].strip().strip(".")
+    if d.startswith("www."):
+        d = d[4:]
+    if not d or "." not in d or " " in d:
+        raise ValueError(f"плохой домен: {raw!r}")
+    try:
+        d = d.encode("idna").decode("ascii")
+    except Exception as e:
+        raise ValueError(f"плохой домен {raw!r}: {e}")
+    return d
+
+
+def expand_domains(raw_list: list[str]) -> list[str]:
+    seen: dict[str, None] = {}
+    for r in raw_list:
+        d = normalize_domain(r)
+        seen[d] = None
+        seen["www." + d] = None
+    return sorted(seen)
+
+
+def resolve_ips(domains: list[str]) -> list[str]:
+    ips: dict[str, None] = {}
+    for d in domains:
+        for name in (d,):
+            try:
+                _, _, lst = socket.gethostbyname_ex(name)
+                for ip in lst:
+                    if "." in ip:
+                        ips[ip] = None
+            except OSError:
+                continue
+    return sorted(ips)
+
+
+def base_of(d: str) -> str:
+    b = d[4:] if d.startswith("www.") else d
+    return b
+
+
+def find_dangerous(domains: list[str]) -> list[str]:
+    out = []
+    for d in domains:
+        if base_of(d) in DANGEROUS_BASES:
+            out.append(d)
+    return sorted(set(out))
+
+
+def build_hosts_block(domains: list[str]) -> str:
+    # hosts не понимает wildcard: пишем только точные имена.
+    # Поддомены закрывают политики браузеров + DNS/IP + SNI (Stage 2).
+    clean = [MARK_BEGIN]
+    for d in domains:
+        clean.append(f"0.0.0.0 {d}")
+    clean.append(MARK_END)
+    return "\n".join(clean) + "\n"
+
+
+def merge_firefox_policies(existing: dict, want_block: list[str]) -> dict:
+    pol = existing.setdefault("policies", {})
+    have = pol.get("WebsiteFilter", {}).get("Block", [])
+    pol["WebsiteFilter"] = {"Block": sorted(set(have) | set(want_block))}
+    return existing
+
+
+def build_nft_rules(domains: list[str], ips: list[str]) -> str:
+    ip_set = ",\n    ".join(ips) if ips else "127.0.0.1"
+    doh_set = ",\n    ".join(DOH_IPS)
+    dns_set = ",\n    ".join(PUBLIC_DNS_IPS)
+    return f"""# beton autogenerated. Do not edit: will be silently restored.
+table inet beton {{
+  set blocked_ipv4 {{
+    type ipv4_addr
+    flags interval
+    elements = {{
+      {ip_set}
+    }}
+  }}
+  set doh_ipv4 {{
+    type ipv4_addr
+    flags interval
+    elements = {{
+      {doh_set}
+    }}
+  }}
+  set pubdns_ipv4 {{
+    type ipv4_addr
+    flags interval
+    elements = {{
+      {dns_set}
+    }}
+  }}
+  chain pre {{
+    type filter hook prerouting priority -150; policy accept;
+    ip daddr @blocked_ipv4 drop
+    tcp dport 853 drop
+    udp dport 853 drop
+    ip daddr @doh_ipv4 tcp dport 443 drop
+    ip daddr @pubdns_ipv4 udp dport 53 drop
+    ip daddr @pubdns_ipv4 tcp dport 53 drop
+  }}
+  chain out {{
+    type filter hook output priority 0; policy accept;
+    ip daddr @blocked_ipv4 drop
+    tcp dport 853 drop
+    udp dport 853 drop
+    ip daddr @doh_ipv4 tcp dport 443 drop
+    ip daddr @pubdns_ipv4 udp dport 53 drop
+    ip daddr @pubdns_ipv4 tcp dport 53 drop
+  }}
+}}
+# NOTE (ascii only for nft parser): precise SNI filter + eBPF killer is Stage 2.
+# MVP blocks via DNS + IP + browser policies.
+# domains: {", ".join(domains)}
+"""
+
+
+def build_chromium_policy(domains: list[str]) -> str:
+    # Два формата разом (проверено матрицей в VM на Chromium 153):
+    # - bare hostname ("example.com"): единственный формат, который Chrome 153
+    #   реально ест в URLBlocklist; покрывает и поддомены. Схемы "*://" он молча
+    #   игнорирует — но они нужны Firefox WebsiteFilter, поэтому оставляем оба.
+    patterns = []
+    for d in domains:
+        base = d[4:] if d.startswith("www.") else d
+        patterns.append(base)
+        patterns.append(f"*://{base}/*")
+        patterns.append(f"*://*.{base}/*")
+    return json.dumps({"URLBlocklist": sorted(set(patterns))}, ensure_ascii=False, indent=2) + "\n"
+
+
+def read_hosts_without_beton() -> str:
+    try:
+        with open(HOSTS, encoding="utf-8") as f:
+            text = f.read()
+    except FileNotFoundError:
+        return ""
+    out = []
+    skip = False
+    for line in text.splitlines():
+        if MARK_BEGIN in line:
+            skip = True
+            continue
+        if MARK_END in line:
+            skip = False
+            continue
+        if not skip:
+            out.append(line)
+    return "\n".join(out).rstrip("\n") + ("\n" if out else "")
+
+
+def backup(tag: str) -> str:
+    ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    dst = os.path.join(BACKUP_ROOT, f"backup-{ts}-{tag}")
+    os.makedirs(dst, exist_ok=True)
+    for src in (HOSTS, NFT_RULES, *FIREFOX_POLICIES):
+        if os.path.isfile(src):
+            shutil.copy2(src, os.path.join(dst, src.strip("/").replace("/", "_")))
+    for src in CHROMIUM_POLICY_DIRS:
+        p = os.path.join(src, "90-beton.json")
+        if os.path.isfile(p):
+            shutil.copy2(p, os.path.join(dst, "chromium_90-beton.json"))
+    with open(os.path.join(dst, "domains.txt"), "w", encoding="utf-8") as f:
+        if os.path.isfile(DOMAINS_FILE):
+            f.write(open(DOMAINS_FILE, encoding="utf-8").read())
+    return dst
+
+
+def apply_hosts(domains: list[str]) -> None:
+    base = read_hosts_without_beton()
+    block = build_hosts_block(domains)
+    with open(HOSTS, "w", encoding="utf-8") as f:
+        f.write(base + block)
+
+
+def apply_nft(domains: list[str], ips: list[str]) -> None:
+    os.makedirs(os.path.dirname(NFT_RULES), exist_ok=True)
+    with open(NFT_RULES, "w", encoding="utf-8") as f:
+        f.write(build_nft_rules(domains, ips))
+    r = run(["nft", "-c", "-f", NFT_RULES])
+    if r.returncode != 0:
+        raise RuntimeError(f"nft check failed: {r.stderr.strip()}")
+    r = run(["nft", "-f", NFT_RULES])
+    if r.returncode != 0:
+        raise RuntimeError(f"nft apply failed: {r.stderr.strip()}")
+
+
+def apply_browser_policies(domains: list[str]) -> None:
+    payload = build_chromium_policy(domains)
+    for d in CHROMIUM_POLICY_DIRS:
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "90-beton.json"), "w", encoding="utf-8") as f:
+            f.write(payload)
+    # Firefox (+ESR): мержим WebsiteFilter.Block в существующие policies.json,
+    # остальные ключи не трогаем. Покрывает системные установки; portable/flatpak
+    # с собственными путями закрываются сетевым слоем (hosts+nft), честное ограничение MVP.
+    firefox_ok = 0
+    for policy_path in FIREFOX_POLICIES:
+        try:
+            os.makedirs(os.path.dirname(policy_path), exist_ok=True)
+            existing: dict = {}
+            if os.path.isfile(policy_path):
+                try:
+                    existing = json.loads(open(policy_path, encoding="utf-8").read() or "{}")
+                except json.JSONDecodeError:
+                    existing = {}
+            want = json.loads(payload)["URLBlocklist"]
+            existing = merge_firefox_policies(existing, want)
+            with open(policy_path, "w", encoding="utf-8") as f:
+                json.dump(existing, f, ensure_ascii=False, indent=2)
+                f.write("\n")
+            firefox_ok += 1
+        except OSError as e:
+            print(f"WARN: firefox policy {policy_path} пропущен: {e}")
+    if not firefox_ok:
+        print("WARN: ни один firefox policy не записан")
+
+
+SERVICE_TMPL = """[Unit]
+Description=beton — молча восстановить блок
+After=network-pre.target
+Before=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/beton enforce
+Nice=19
+IOSchedulingClass=idle
+"""
+
+TIMER_TMPL = """[Unit]
+Description=beton watchdog timer
+
+[Timer]
+OnBootSec=20s
+OnUnitActiveSec=30s
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+"""
+
+HOOK_TMPL = """[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Package
+Target = *
+
+[Action]
+Description = beton restore after pacman transaction
+When = PostTransaction
+Exec = /usr/local/bin/beton enforce
+"""
+
+
+def install_self_and_watchdog() -> None:
+    src = os.path.abspath(sys.argv[0])
+    if os.path.abspath(BIN_DST) != src:
+        shutil.copy2(src, BIN_DST)
+        os.chmod(BIN_DST, 0o755)
+    with open(SERVICE, "w", encoding="utf-8") as f:
+        f.write(SERVICE_TMPL)
+    with open(TIMER, "w", encoding="utf-8") as f:
+        f.write(TIMER_TMPL)
+    os.makedirs(os.path.dirname(PACMAN_HOOK), exist_ok=True)
+    with open(PACMAN_HOOK, "w", encoding="utf-8") as f:
+        f.write(HOOK_TMPL)
+    run(["systemctl", "daemon-reload"])
+    # restart, а не start: после revert+reinstall enable --now оставляет таймер
+    # в зависшем elapsed-состоянии без срабатываний (поймано в VM-матрице).
+    run(["systemctl", "enable", "beton-enforce.timer"])
+    r = run(["systemctl", "restart", "beton-enforce.timer"])
+    if r.returncode != 0:
+        raise RuntimeError(f"timer restart failed: {r.stderr.strip()}")
+
+
+def lock_files() -> None:
+    for p in [HOSTS, NFT_RULES, PACMAN_HOOK,
+              *[os.path.join(d, "90-beton.json") for d in CHROMIUM_POLICY_DIRS],
+              *FIREFOX_POLICIES]:
+        if os.path.isfile(p):
+            run(["chattr", "+i", p])
+
+
+def unlock_files() -> None:
+    for p in [HOSTS, NFT_RULES, PACMAN_HOOK,
+              *[os.path.join(d, "90-beton.json") for d in CHROMIUM_POLICY_DIRS],
+              *FIREFOX_POLICIES]:
+        if os.path.isfile(p):
+            run(["chattr", "-i", p])
+
+
+def install_time() -> float:
+    try:
+        return os.stat(DOMAINS_FILE).st_mtime
+    except OSError:
+        return 0.0
+
+
+def load_allowlist() -> set[str]:
+    try:
+        with open(ALLOWLIST_PROCS_FILE, encoding="utf-8") as f:
+            return {l.strip() for l in f if l.strip() and not l.startswith("#")}
+    except OSError:
+        return set()
+
+
+def iter_bypass_candidates() -> list[tuple[int, str]]:
+    """Процессы-обходы, поставленные ПОСЛЕ установки. Рабочее до нас не трогаем."""
+    its = install_time()
+    if not its:
+        return []
+    allow = load_allowlist()
+    out: list[tuple[int, str]] = []
+    try:
+        pids = [p for p in os.listdir("/proc") if p.isdigit()]
+    except OSError:
+        return []
+    for pid in pids:
+        try:
+            with open(f"/proc/{pid}/comm", encoding="utf-8") as f:
+                name = f.read().strip()
+        except OSError:
+            continue
+        if name not in BYPASS_PROC_NAMES or name in allow:
+            continue
+        try:
+            exe_mtime = os.stat(f"/proc/{pid}/exe").st_mtime
+        except OSError:
+            continue
+        if exe_mtime > its:
+            out.append((int(pid), name))
+    return out
+
+
+def kill_bypass_processes() -> list[tuple[int, str]]:
+    killed = []
+    for pid, name in iter_bypass_candidates():
+        try:
+            os.kill(pid, 9)
+            killed.append((pid, name))
+            log(f"kill: обходной процесс {name} pid={pid} убит")
+        except OSError as e:
+            log(f"kill FAILED {name} pid={pid}: {e}")
+    return killed
+
+
+def note_tamper(window_sec: int = 600, limit: int = 20) -> int:
+    now = time.time()
+    stamps: list[float] = []
+    try:
+        with open(TAMPER_COUNT_FILE, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    stamps.append(float(line.strip()))
+                except ValueError:
+                    continue
+    except OSError:
+        pass
+    stamps = [t for t in stamps if now - t < window_sec] + [now]
+    stamps = stamps[-limit:]
+    try:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        with open(TAMPER_COUNT_FILE, "w", encoding="utf-8") as f:
+            f.write("\n".join(str(t) for t in stamps) + "\n")
+    except OSError:
+        pass
+    return len(stamps)
+
+
+def tamper_count(window_sec: int = 600) -> int:
+    now = time.time()
+    try:
+        with open(TAMPER_COUNT_FILE, encoding="utf-8") as f:
+            return sum(1 for line in f
+                       if line.strip() and now - float(line.strip()) < window_sec)
+    except (OSError, ValueError):
+        return 0
+
+
+def punish_active() -> bool:
+    try:
+        with open(PUNISH_FLAG_FILE, encoding="utf-8") as f:
+            return time.time() < float(f.read().strip())
+    except (OSError, ValueError):
+        return False
+
+
+def engage_punish(minutes: int = 15) -> None:
+    """Наказание только атакующего контура: режем QUIC/udp443 на время.
+    Обычные сайты уходят в TCP-фолбэк и работают, обходы тормозятся."""
+    until = time.time() + minutes * 60
+    try:
+        os.makedirs(os.path.dirname(PUNISH_QUIC_NFT), exist_ok=True)
+        with open(PUNISH_QUIC_NFT, "w", encoding="utf-8") as f:
+            f.write("""# beton punish (temporary). Auto-lifted.
+table inet beton_punish {
+  chain out {
+    type filter hook output priority 0; policy accept;
+    udp dport 443 drop
+  }
+}
+""")
+        r = run(["nft", "-f", PUNISH_QUIC_NFT])
+        if r.returncode != 0:
+            log(f"punish nft FAILED: {r.stderr.strip()}")
+            return
+        with open(PUNISH_FLAG_FILE, "w", encoding="utf-8") as f:
+            f.write(str(until))
+        log(f"punish: QUIC-drop на {minutes} мин за упорную атаку")
+    except OSError as e:
+        log(f"punish FAILED: {e}")
+
+
+def lift_punish_if_expired() -> None:
+    if punish_active():
+        return
+    try:
+        os.remove(PUNISH_FLAG_FILE)
+    except OSError:
+        pass
+    r = run(["nft", "delete", "table", "inet", "beton_punish"])
+    if r.returncode == 0:
+        log("punish: срок вышел, QUIC возвращен")
+
+
+def load_domains() -> list[str]:
+    if not os.path.isfile(DOMAINS_FILE):
+        return []
+    return [l.strip() for l in open(DOMAINS_FILE, encoding="utf-8") if l.strip()]
+
+
+def cmd_dry_run(raw: list[str]) -> int:
+    try:
+        domains = expand_domains(raw)
+    except ValueError as e:
+        print(f"Ошибка: {e}")
+        return 2
+    ips = resolve_ips(domains)
+    print("== BETON DRY-RUN (система НЕ меняется) ==")
+    print(f"Домены ({len(domains)}): {', '.join(domains)}")
+    dang = find_dangerous(domains)
+    if dang:
+        print(f"!!! СТОП: {', '.join(dang)} — общая инфра, ляжет пол-интернета.")
+        print("!!! Нужен флаг --i-know-this-breaks-half-internet, иначе block откажет.")
+    print(f"IP сейчас резолвятся ({len(ips)}): {', '.join(ips) if ips else '— (DNS не отдал, hosts+политики всё равно закроют имена)'}")
+    print(f"DoH-блок: порты 853 + :443 к {', '.join(DOH_IPS)}")
+    print("--- /etc/hosts добавит ---")
+    print(build_hosts_block(domains), end="")
+    print("--- nft rules ---")
+    print(build_nft_rules(domains, ips), end="")
+    print("--- chromium policy ---")
+    print(build_chromium_policy(domains), end="")
+    print("--- watchdog: beton-enforce.service + timer 30s + pacman hook ---")
+    print(f"--- киллер обходов (только поставленные ПОСЛЕ установки, allowlist: {ALLOWLIST_PROCS_FILE}) ---")
+    print(f"--- {', '.join(sorted(BYPASS_PROC_NAMES))} ---")
+    print("--- лестница: restore молча -> 3 сноса за 10 мин = QUIC-drop на 15 мин (автоснятие) ---")
+    print("OK: dry-run чистый. Для применения: sudo ./beton")
+    return 0
+
+
+def policies_ok(domains: list[str]) -> bool:
+    """Политики на месте? Новый браузер после установки без них — тоже чинка."""
+    try:
+        want = set(json.loads(build_chromium_policy(domains))["URLBlocklist"])
+    except ValueError:
+        return False
+    for d in CHROMIUM_POLICY_DIRS:
+        # apply создаёт все эти пути — требовать все: снос любого чинится.
+        p = os.path.join(d, "90-beton.json")
+        try:
+            have = set(json.loads(open(p, encoding="utf-8").read()).get("URLBlocklist", []))
+        except (OSError, json.JSONDecodeError):
+            return False
+        if not want.issubset(have):
+            return False
+    for fp in FIREFOX_POLICIES:
+        try:
+            cur = json.loads(open(fp, encoding="utf-8").read() or "{}")
+            have = set(cur.get("policies", {}).get("WebsiteFilter", {}).get("Block", []))
+        except (OSError, json.JSONDecodeError):
+            return False
+        if not want.issubset(have):
+            return False
+    return True
+
+
+def cmd_enforce() -> int:
+    domains = load_domains()
+    if not domains:
+        return 0  # нечего сторожить — полная тишина (невидимость)
+    lift_punish_if_expired()
+    killed = kill_bypass_processes()
+    try:
+        with open(HOSTS, encoding="utf-8") as f:
+            has = MARK_BEGIN in f.read()
+    except OSError:
+        has = False
+    r = run(["nft", "list", "table", "inet", "beton"])
+    nft_ok = r.returncode == 0
+    pol_ok = policies_ok(domains)
+    if has and nft_ok and pol_ok:
+        return 0  # compliant — молчим, нас нет
+    # Атака/снос замечен — молча восстанавливаем, без диалогов.
+    try:
+        unlock_files()
+    except Exception:
+        pass
+    try:
+        apply_hosts(domains)
+        apply_nft(domains, resolve_ips(domains))
+        apply_browser_policies(domains)
+        lock_files()
+        n = note_tamper()
+        log(f"enforce: восстановлен блок {','.join(domains)} tamper10min={n} killed={killed}")
+        if n >= 3 and not punish_active():
+            engage_punish(15)
+            time.sleep(3)  # измотать цикл «снести-за-1-сек», сторожу не вредит
+    except Exception as e:
+        log(f"enforce FAILED: {e}")
+        return 1
+    return 0
+
+
+def cmd_status() -> int:
+    domains = load_domains()
+    print(f"Домены: {', '.join(domains) if domains else '— (не установлено)'}")
+    try:
+        has = MARK_BEGIN in open(HOSTS, encoding="utf-8").read()
+    except OSError as e:
+        has = f"ERR {e}"
+    print(f"hosts: {'OK' if has is True else has}")
+    r = run(["nft", "list", "table", "inet", "beton"])
+    print(f"nft inet beton: {'OK' if r.returncode == 0 else 'НЕТ'}")
+    r = run(["systemctl", "is-active", "beton-enforce.timer"])
+    print(f"watchdog timer: {r.stdout.strip() or r.stderr.strip()}")
+    print(f"tamper за 10 мин: {tamper_count()}")
+    print(f"punish (QUIC-drop): {'АКТИВЕН' if punish_active() else 'нет'}")
+    print(f"allowlist процессов: {ALLOWLIST_PROCS_FILE}")
+    return 0
+
+
+def cmd_revert() -> int:
+    if not is_root():
+        print("Нужно sudo.")
+        return 2
+    if is_final():
+        print("FINAL: машина финализирована. Снятие — только переустановкой ОС.")
+        return 4
+    print("ВНИМАНИЕ: revert существует ТОЛЬКО для тестов в VM. В финале его не будет.")
+    unlock_files()
+    base = read_hosts_without_beton()
+    with open(HOSTS, "w", encoding="utf-8") as f:
+        f.write(base)
+    run(["nft", "delete", "table", "inet", "beton"])
+    run(["nft", "delete", "table", "inet", "beton_punish"])
+    for p in (TAMPER_COUNT_FILE, PUNISH_FLAG_FILE, PUNISH_QUIC_NFT, DOMAINS_FILE):
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+    for d in CHROMIUM_POLICY_DIRS:
+        p = os.path.join(d, "90-beton.json")
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+    for p in (SERVICE, TIMER, PACMAN_HOOK):
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+    run(["systemctl", "daemon-reload"])
+    print("Откачено (тестовый режим).")
+    log("revert-for-testing выполнен")
+    return 0
+
+
+def do_apply(domains: list[str]) -> None:
+    os.makedirs(STATE_DIR, exist_ok=True)
+    # apply после прерванного предшественника: снять старые immutable, иначе EPERM
+    # (поймано в VM-матрице).
+    try:
+        unlock_files()
+    except Exception:
+        pass
+    bdir = backup("pre-apply")
+    print(f"Бэкап: {bdir}")
+    with open(DOMAINS_FILE, "w", encoding="utf-8") as f:
+        f.write("\n".join(domains) + "\n")
+    ips = resolve_ips(domains)
+    apply_hosts(domains)
+    apply_nft(domains, ips)
+    apply_browser_policies(domains)
+    install_self_and_watchdog()
+    lock_files()
+    log(f"apply: {','.join(domains)} backup={bdir}")
+    # Проверка что сторож реально держит
+    fails = []
+    try:
+        for d in domains:
+            if d.startswith("www."):
+                continue
+            try:
+                if socket.gethostbyname(d) != "0.0.0.0":
+                    fails.append(d)
+            except OSError:
+                pass
+    except Exception:
+        pass
+    if fails:
+        print(f"WARN: эти имена не ушли в 0.0.0.0 через gethostbyname: {fails} (nft+политики всё равно режут, см. status)")
+    print("Готово. Забудь. Живи.")
+    print("Снять: только переустановка ОС (в MVP для тестов в VM есть revert-for-testing).")
+
+
+def cmd_block(raw: list[str], assume_yes: bool, countdown: int = 10,
+              breaks_half_internet: bool = False) -> int:
+    if not is_root():
+        print("Нужно sudo: sudo ./beton block ...")
+        return 2
+    try:
+        domains = expand_domains(raw)
+    except ValueError as e:
+        print(f"Ошибка: {e}")
+        return 2
+    dang = find_dangerous(domains)
+    if dang and not breaks_half_internet:
+        print(f"СТОП: {', '.join(dang)} — общая инфра. Это убьет пол-интернета, а не один сайт.")
+        print("Если точно надо — добавь флаг --i-know-this-breaks-half-internet.")
+        print("Я ничего не тронул.")
+        return 3
+    print(f"Я закрою навсегда: {', '.join(domains)}")
+    print("Остальное не трону: sudo, обновления, файлы, другие сайты.")
+    print("Обход/снос будет молча убит и откачен. Сайт будет выглядеть мертвым.")
+    if not assume_yes:
+        print(f"Введи фразу: {FOREVER_PHRASE}")
+        ans = input("> ").strip()
+        if ans != FOREVER_PHRASE:
+            print("Отмена. Я ничего не тронул.")
+            return 1
+    print(f"Точка невозврата через {countdown}с. Ctrl+C — последний шанс.")
+    try:
+        for i in range(countdown, 0, -1):
+            print(f"  {i}...", flush=True)
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\nОтмена. Ничего не тронуто.")
+        return 1
+    try:
+        do_apply(domains)
+    except Exception as e:
+        print(f"ОШИБКА применения: {e}")
+        return 1
+    return 0
+
+
+EBPF_MAX_PATTERNS = 64
+EBPF_MAX_PAT_LEN = 64
+
+
+def render_ebpf_patterns(bases: list[str], port: int = 443) -> str:
+    """Тот же формат, что l2/codegen.py. Паритет проверяется тестами.
+    Сборка и цепление — только в VM (см. l2/)."""
+    if len(bases) > EBPF_MAX_PATTERNS:
+        raise ValueError(f"паттернов {len(bases)} > {EBPF_MAX_PATTERNS}: режь список")
+    lines = [
+        "/* AUTOGENERATED by beton gen-ebpf — не править руками. */",
+        "#pragma once",
+        "",
+        f"#define BETON_NPATS {len(bases)}",
+        f"#define BETON_MAX_PAT_LEN {EBPF_MAX_PAT_LEN}",
+        f"#define BETON_PORT {port}",
+        "",
+        "struct beton_pat { __u8 len; __u8 data[BETON_MAX_PAT_LEN]; };",
+        "",
+        "__attribute__((unused)) static const struct beton_pat beton_pats[BETON_NPATS] = {",
+    ]
+    for p in bases:
+        b = p.encode("ascii")
+        if len(b) > EBPF_MAX_PAT_LEN:
+            raise ValueError(f"паттерн слишком длинный: {p}")
+        lines.append(f"  {{ {len(b)}, {{{', '.join(str(x) for x in b)}}} }}, /* {p} */")
+    lines += ["};", ""]
+    return "\n".join(lines)
+
+
+def cmd_gen_ebpf(raw: list[str], out: str, port: int = 443) -> int:
+    try:
+        domains = expand_domains(raw)
+    except ValueError as e:
+        print(f"Ошибка: {e}")
+        return 2
+    bases = sorted({base_of(d) for d in domains})
+    for p in bases:
+        try:
+            p.encode("ascii")
+        except UnicodeEncodeError:
+            print(f"не-ascii база после нормализации: {p}")
+            return 2
+    try:
+        text = render_ebpf_patterns(bases, port)
+    except ValueError as e:
+        print(f"Ошибка: {e}")
+        return 2
+    with open(out, "w", encoding="utf-8") as f:
+        f.write(text)
+    print(f"{len(bases)} паттернов порт {port} -> {out} (сборка и цепление — только в VM, см. l2/)")
+    return 0
+
+
+def cmd_interactive() -> int:
+    if not is_root():
+        print("Запусти с sudo, я сам всё сделаю: sudo ./beton")
+        print("Хочешь только посмотреть план без изменений: ./beton dry-run youtube.com")
+        return 2
+    print("== BETON: я сам всё сделаю, думать не надо ==")
+    raw = input("Какие сайты закрыть навсегда? (через пробел, например: youtube.com tiktok.com)\n> ").strip().split()
+    if not raw:
+        print("Пусто — ничего не тронул.")
+        return 1
+    return cmd_block(raw, assume_yes=False)
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(prog="beton", description="невидимый сторож: закрывает сайты навсегда")
+    sub = ap.add_subparsers(dest="cmd")
+    p = sub.add_parser("block", help="закрыть навсегда")
+    p.add_argument("domains", nargs="+")
+    p.add_argument("--yes-i-understand-this-is-forever", action="store_true")
+    p.add_argument("--i-know-this-breaks-half-internet", action="store_true")
+    p.add_argument("--countdown", type=int, default=10)
+    d = sub.add_parser("dry-run", help="показать план без изменений")
+    d.add_argument("domains", nargs="+")
+    sub.add_parser("status", help="проверить держит ли")
+    sub.add_parser("enforce", help="молча восстановить (внутреннее)")
+    sub.add_parser("revert-for-testing", help="ОТКАТ ТОЛЬКО ДЛЯ VM-ТЕСТОВ")
+    sub.add_parser("interactive", help="режим одной команды")
+    g = sub.add_parser("gen-ebpf", help="сгенерировать patterns.h для L2 (без root, без изменений системы)")
+    g.add_argument("domains", nargs="+")
+    g.add_argument("--out", default="patterns.h")
+    g.add_argument("--port", type=int, default=443)
+    ap.add_argument("--version", action="store_true", help="версия и выход")
+    a = ap.parse_args()
+    if a.version:
+        print(f"{APP} {VERSION}")
+        return 0
+    if a.cmd == "block":
+        if not a.yes_i_understand_this_is_forever:
+            return cmd_block(a.domains, assume_yes=False, countdown=a.countdown,
+                             breaks_half_internet=a.i_know_this_breaks_half_internet)
+        return cmd_block(a.domains, assume_yes=True, countdown=a.countdown,
+                         breaks_half_internet=a.i_know_this_breaks_half_internet)
+    if a.cmd == "dry-run":
+        return cmd_dry_run(a.domains)
+    if a.cmd == "status":
+        return cmd_status()
+    if a.cmd == "enforce":
+        if not is_root():
+            print("Нужно sudo.")
+            return 2
+        return cmd_enforce()
+    if a.cmd == "revert-for-testing":
+        return cmd_revert()
+    if a.cmd == "gen-ebpf":
+        return cmd_gen_ebpf(a.domains, a.out, a.port)
+    return cmd_interactive()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
