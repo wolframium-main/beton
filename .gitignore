@@ -12,3 +12,4 @@ l3/__pycache__/
 l2/patterns.h
 /tmp/
 *.pyc
+vm/qemu.pid
