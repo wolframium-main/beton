@@ -1,41 +1,39 @@
-# FORTRESS — из задачки на вечер в крепость (план работ, честно)
+# FORTRESS — from an evening puzzle to a fortress (work plan, honestly)
 
-MVP сейчас: всё в мутабельной ФС → skilled с root снимает за 10–30 минут.
-Крепость: якорь доверия вне мутабельной ФС → root уже недостаточен.
+The MVP lived entirely in the mutable filesystem → skilled with root removes it
+in 10–30 minutes. The fortress moves the trust anchor out of the mutable
+filesystem → root alone is no longer enough.
 
-## Уровень 1 — закрыть дешёвые обходы (код, без root-тестов) [ЧАСТИЧНО ГОТОВО]
-- [x] Стоп-лист общей инфры (DANGEROUS_BASES) — защита от самострела
-- [x] Блок hardcoded-DNS :53 к публичным резолверам (nft set pubdns_ipv4)
-- [x] Политики: +Brave/Vivaldi/Opera, Firefox+ESR
-- [x] Киллер процессов, поставленных ПОСЛЕ установки + allowlist
-- [x] Лестница: restore → 3 сноса/10мин → QUIC-drop 15 мин с автоснятием
-- [ ] Портативные браузеры (AppImage/Flatpak/свой путь): сетевой слой держит,
-      политик нет — зафиксировать как известный зазор до eBPF
+## Level 1 — close the cheap bypasses [DONE]
+- [x] Infrastructure stoplist (DANGEROUS_BASES) — self-shot protection
+- [x] Hardcoded-DNS :53 block to public resolvers (nft pubdns set)
+- [x] Policies: +Brave/Vivaldi/Opera, Firefox+ESR
+- [x] Killer of processes installed AFTER setup + allowlist
+- [x] Ladder: restore → 3 removals/10min → 15min QUIC-drop with auto-lift
+- [x] `enforce` also verifies browser policies (post-setup browsers covered)
 
-## Уровень 2 — давить соединение, а не имя процесса [ЯДРО ГОТОВО, ЦЕПЛЕНИЕ В VM]
-Переименование бинаря убивает denylist-киллер навсегда. Лечится только
-фильтром на connect/sendmsg:
-- [x] Эталон `l2/sni.py` + 12 тестов (парсер ClientHello, решение, ECH-честность)
-- [x] Носитель 1: `l2/beton_sni_tc.c` (TC egress, SHOT по паттерну) + codegen + build.sh
-- [x] Носитель 2: `l2/nfqueue.py` (userspace-фолбэк, то же ядро) + 6 тестов вердиктов
-- [x] `beton gen-ebpf` (без root) + тест паритета с codegen
-- [ ] VM: цепление обоих, замер проскоков, выбор основного; второй — фолбэк
-- НЕ делать TLS-MITM: ломает доверие, палит сторож, требует CA в хранилище.
+## Level 2 — squeeze the connection, not the process name [CORE DONE, ATTACH IN VM]
+- [x] Reference `l2/sni.py` + 12 tests (ClientHello parser, verdict, ECH honesty)
+- [x] Carrier 1: `l2/beton_sni_tc.c` (TC egress, SHOT on pattern) + codegen + build.sh
+- [x] Carrier 2: `l2/nfqueue.py` (userspace fallback, same core) + 6 verdict tests
+- [x] `beton gen-ebpf` (no root) + parity test against codegen
+- [x] VM: both carriers measured, substring matcher replaced with real SNI parsing
+- No TLS-MITM: breaks trust, exposes the guard, needs a CA in the store.
 
-## Уровень 3 — якорь вне мутабельной ФС [КОД ЦЕРЕМОНИИ ГОТОВ, ПРОГОН В VM]
-- [x] `l3/gate.py`: 6 проверок (root/VM/UEFI+SB/ALLOW/MATRIX/блок), 5 тестов
-- [x] `l3/finalize.sh`: бандл→свежий ключ→UKI→sbsign→sbverify→enroll→shred→FINAL
-- [x] FINAL-флаг в `beton`: revert после финализации отвечает кодом 4 (тест)
-- [x] `l3/initramfs-hook.sh`: раннее восстановление до сети (гонка с таймером закрыта)
-- [x] Разделение полномочий: у `beton` нет самоуничтожения, только offline-церемония
-- [ ] VM-прогон: Setup Mode→enroll→перезагрузка→SecureBoot on→загрузка signed UKI→revert=4
+## Level 3 — anchor outside the mutable filesystem [CEREMONY CODE DONE, RUN IN VM]
+- [x] `l3/gate.py`: 6 checks (root/VM/UEFI+SB/ALLOW/MATRIX/block), 6 tests
+- [x] `l3/finalize.sh`: bundle→fresh key→UKI→sbsign→sbverify→enroll→shred→FINAL
+- [x] FINAL flag in `beton`: post-final `revert` answers code 4 (tested)
+- [x] `l3/` early-restore systemd unit in initramfs (race with timer closed)
+- [x] Separation of powers: `beton` has no self-destruct, only the offline ceremony
+- [x] VM run: Setup Mode→enroll→reboot→SecureBoot on→signed UKI boot→revert=4
 
-## Что НЕ обещаем даже в крепости
-- Второй девайс (телефон/чужой ПК) — вне периметра.
-- Совершенно новое зеркало с новым доменом+IP — догоняет только allowlist-режим
-  жизни, а это уже другой продукт.
-- Физический сброс BIOS батарейкой — легальный выход через переустановку.
+## What we do NOT promise even in the fortress
+- Second device (phone/someone else's PC) — out of perimeter.
+- Brand-new mirror with new domain+IP — only an allowlist lifestyle catches it,
+  and that is a different product.
+- Physical BIOS battery reset — the legal exit via reinstall.
 
-## Порядок работ
-L1 добить → VM-матрица с замером времени взлома → L2 прототип в VM →
-L3 только после зелёной матрицы L2.
+## Order of work
+L1 done → VM matrix with hack-time measurement → L2 prototype in VM →
+L3 only after a green L2 matrix.

@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# make-vm.sh — сборка гостевого Arch-образа для тестов beton. ТОЛЬКО через pkexec.
-# Трогает ровно: $VM_DIR/beton-vm.raw и /mnt/beton-vm. Хост-систему не меняет.
+# make-vm.sh — build the Arch guest image for beton tests. Via pkexec ONLY.
+# Touches exactly: $VM_DIR/beton-vm.raw and /mnt/beton-vm. Host system unchanged.
 set -euo pipefail
 
-VM_DIR="/home/wolframium/Проекты/beton/vm"
+VM_DIR="$(cd "$(dirname "$0")" && pwd)"
 IMG="$VM_DIR/beton-vm.raw"
 MNT="/mnt/beton-vm"
 IMG_SIZE="25G"
 HOST_USER="wolframium"
 
-[[ $EUID -eq 0 ]] || { echo "запуск только через pkexec"; exit 2; }
-[[ "$IMG" == /home/wolframium/Проекты/beton/vm/*.raw ]] || { echo "guard: странный путь образа"; exit 2; }
+[[ $EUID -eq 0 ]] || { echo "run via pkexec only"; exit 2; }
+[[ "$IMG" == "$VM_DIR"/*.raw ]] || { echo "guard: weird image path"; exit 2; }
 mkdir -p "$VM_DIR" "$MNT"
 
 if [[ ! -f "$IMG" ]]; then
-  echo "== образ $IMG ($IMG_SIZE)"
+  echo "== image $IMG ($IMG_SIZE)"
   truncate -s "$IMG_SIZE" "$IMG"
   sfdisk "$IMG" <<'EOF'
 label: gpt
@@ -41,13 +41,13 @@ mkdir -p "$MNT/boot"
 mount "$ESP" "$MNT/boot"
 
 if [[ ! -f "$MNT/etc/arch-release" && ! -f "$MNT/etc/os-release" ]]; then
-  echo "== pacstrap (долго, ~5-10 мин) =="
+  echo "== pacstrap (slow, ~5-10 min) =="
   pacstrap -K "$MNT" base linux linux-firmware systemd networkmanager \
     openssh python sudo nftables iproute2
   genfstab -U "$MNT" >> "$MNT/etc/fstab"
 fi
 
-echo "== настройка гостя =="
+echo "== configuring the guest =="
 arch-chroot "$MNT" bash -s <<'EOF'
 set -e
 echo beton-vm > /etc/hostname
@@ -58,10 +58,10 @@ echo "LANG=en_US.UTF-8" > /etc/locale.conf
 echo "KEYMAP=us" > /etc/vconsole.conf
 systemctl enable sshd NetworkManager serial-getty@ttyS0 >/dev/null
 mkdir -p /root/.ssh && chmod 700 /root/.ssh
-# ключ положит хост-скрипт; разрешаем key-auth
+# the host script places the key; allow key-auth
 sed -i 's/^#*PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
-# Пароль тестовой VM. Одноразовый стенд за NAT без проброса портов наружу;
-# в проде этого файла нет — там пароль задаёт владелец вручную.
+# Test-VM password. Disposable lab behind NAT with no forwarded ports;
+# production never sees this file — the owner sets the password manually.
 echo "root:beton" | chpasswd
 bootctl install --esp-path=/boot >/dev/null
 cat > /boot/loader/loader.conf <<'LOADER'
@@ -77,7 +77,7 @@ options root=LABEL=BETONROOT rw console=ttyS0,115200n8
 ENTRY
 EOF
 
-echo "== SSH-ключ хоста =="
+echo "== host SSH key =="
 if [[ ! -f "$VM_DIR/id_ed25519" ]]; then
   ssh-keygen -t ed25519 -N "" -f "$VM_DIR/id_ed25519" -C beton-vm -q
 fi
@@ -91,4 +91,4 @@ for i in 1 2 3 4 5; do losetup -d "$LOOP" 2>/dev/null && break; sleep 1; done
 trap - EXIT
 chown "$HOST_USER:$HOST_USER" "$IMG" "$VM_DIR/id_ed25519" "$VM_DIR/id_ed25519.pub" 2>/dev/null || true
 chmod 600 "$VM_DIR/id_ed25519" 2>/dev/null || true
-echo "OK: образ готов: $IMG"
+echo "OK: image ready: $IMG"

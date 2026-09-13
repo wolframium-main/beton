@@ -1,4 +1,4 @@
-"""Тесты гейта L3. Без root. Запуск: python3 test_gate.py"""
+"""L3 gate tests. No root. Run: python3 test_gate.py"""
 import os
 import sys
 import unittest
@@ -19,10 +19,10 @@ class TestGate(unittest.TestCase):
             self.assertTrue(ok, v)
 
     def test_allow_requires_phrase(self):
-        with mock.patch("builtins.open", mock.mock_open(read_data="мусор")):
+        with mock.patch("builtins.open", mock.mock_open(read_data="junk")):
             ok, _ = gate.check_allow()
             self.assertFalse(ok)
-        with mock.patch("builtins.open", mock.mock_open(read_data="Я ПРИНИМАЮ НЕОБРАТИМОСТЬ 2026-09-13")):
+        with mock.patch("builtins.open", mock.mock_open(read_data=gate.ALLOW_PHRASE + " 2026-09-13")):
             ok, _ = gate.check_allow()
             self.assertTrue(ok)
 
@@ -44,7 +44,7 @@ class TestGate(unittest.TestCase):
             self.assertFalse(ok)
 
     def test_host_fails_gate(self):
-        # На хосте-разработке (bare metal, без ALLOW-файлов) гейт обязан краснеть.
+        # On a dev host (bare metal, no ALLOW files) the gate must go red.
         self.assertNotEqual(gate.main(), 0)
 
 

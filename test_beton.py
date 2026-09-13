@@ -1,4 +1,4 @@
-"""Автотесты beton. Без root, систему не трогают. Запуск: python3 test_beton.py"""
+"""beton unit tests. No root, system untouched. Run: python3 test_beton.py"""
 import importlib.util
 from importlib.machinery import SourceFileLoader
 import json
@@ -20,7 +20,7 @@ class TestNormalize(unittest.TestCase):
         self.assertIn("xn--", d)
 
     def test_bad(self):
-        for bad in ["", "nodot", "плохой домен!!!", "a b.com"]:
+        for bad in ["", "nodot", "bad domain!!!", "a b.com"]:
             with self.assertRaises(ValueError, msg=bad):
                 M.normalize_domain(bad)
 
@@ -46,14 +46,14 @@ class TestHosts(unittest.TestCase):
         txt = M.build_hosts_block(["youtube.com"])
         self.assertIn(M.MARK_BEGIN, txt)
         self.assertIn("0.0.0.0 youtube.com", txt)
-        self.assertNotIn("*", txt)  # hosts без wildcard
+        self.assertNotIn("*", txt)  # hosts has no wildcards
         self.assertTrue(txt.endswith("\n"))
 
 
 class TestNft(unittest.TestCase):
     def test_ascii_only(self):
         rules = M.build_nft_rules(["youtube.com"], ["1.2.3.4"])
-        rules.encode("ascii")  # парсер nft капризен к не-ascii
+        rules.encode("ascii")  # the nft parser is picky about non-ascii
         self.assertIn("table inet beton", rules)
         self.assertIn("1.2.3.4", rules)
         self.assertTrue(rules.endswith("\n"))
@@ -66,9 +66,9 @@ class TestNft(unittest.TestCase):
 class TestPolicies(unittest.TestCase):
     def test_chromium_wildcards(self):
         p = json.loads(M.build_chromium_policy(["www.youtube.com", "youtube.com"]))
-        # bare hostname: единственный формат, блокирующий в Chrome 153 (замер VM)
+        # bare hostname: the only format blocking in Chrome 153 (VM measurement)
         self.assertIn("youtube.com", p["URLBlocklist"])
-        # scheme-формы: для Firefox WebsiteFilter
+        # scheme forms: for Firefox WebsiteFilter
         self.assertIn("*://*.youtube.com/*", p["URLBlocklist"])
         self.assertIn("*://youtube.com/*", p["URLBlocklist"])
 
@@ -83,7 +83,7 @@ class TestPolicies(unittest.TestCase):
 class TestKillerScope(unittest.TestCase):
     def test_bypass_list_not_empty_and_scoped(self):
         self.assertIn("tor", M.BYPASS_PROC_NAMES)
-        # обычный софт не в списке убийств
+        # regular software not on the kill list
         for safe in ["firefox", "chromium", "code", "steam", "pacman"]:
             self.assertNotIn(safe, M.BYPASS_PROC_NAMES)
 
@@ -133,15 +133,15 @@ class TestEbpfParity(unittest.TestCase):
 class TestFinalFlag(unittest.TestCase):
     def test_not_final_on_dev_host(self):
         if os.path.exists(M.FINAL_FLAG):
-            self.skipTest("машина финализирована")
+            self.skipTest("machine finalized")
         self.assertFalse(M.is_final())
 
     def test_revert_refuses_when_final(self):
         real = M.is_final
         M.is_final = lambda: True
         try:
-            # без root упираемся в sudo-проверку раньше флага; с root был бы код 4.
-            # Здесь проверяем лишь что флаг читается предикатом.
+            # without root we hit the sudo check before the flag; with root it would be code 4.
+            # Here we only check the flag is readable by the predicate.
             self.assertTrue(M.is_final())
         finally:
             M.is_final = real
@@ -168,7 +168,7 @@ class TestPoliciesOk(unittest.TestCase):
             M.CHROMIUM_POLICY_DIRS, M.FIREFOX_POLICIES = [cdir], [fp]
             try:
                 self.assertTrue(M.policies_ok(doms))
-                os.remove(cp)  # снос одного файла политик
+                os.remove(cp)  # remove one policy file
                 self.assertFalse(M.policies_ok(doms))
             finally:
                 M.CHROMIUM_POLICY_DIRS, M.FIREFOX_POLICIES = old_c, old_f

@@ -1,4 +1,4 @@
-"""Тесты L2 SNI-ядра. Без root. Запуск: python3 test_sni.py (из каталога l2)."""
+"""L2 SNI core tests. No root. Run: python3 test_sni.py (from the l2 dir)."""
 import os
 import struct
 import sys
@@ -9,7 +9,7 @@ import sni
 
 
 def build_hello(names: list[str] | None) -> bytes:
-    """Минимальный TLS ClientHello. names=None — без extension block."""
+    """Minimal TLS ClientHello. names=None — no extension block."""
     rnd = b"\x11" * 32
     body = b"\x03\x03" + rnd + b"\x00"  # version + random + empty session
     body += struct.pack("!H", 2) + b"\x13\x01"  # 1 ciphersuite
@@ -21,7 +21,7 @@ def build_hello(names: list[str] | None) -> bytes:
             entries += b"\x00" + struct.pack("!H", len(nb)) + nb
         snl = struct.pack("!H", len(entries)) + entries
         ext = struct.pack("!HH", 0x0000, len(snl)) + snl
-        # добавляем шумовое расширение до и после, как в реальном hello
+        # noise extension before and after, like a real hello
         noise = struct.pack("!HH", 0x000A, 2) + b"\x00\x00"
         ext = noise + ext + noise
         body += struct.pack("!H", len(ext)) + ext
@@ -52,8 +52,8 @@ class TestExtract(unittest.TestCase):
         self.assertIsNone(sni.extract_sni(full[:-4]))
 
     def test_ech_honesty(self):
-        # При ECH на проводе только внешнее имя: парсер честно вернет его,
-        # а не скрытую цель. Скрытая цель SNI-фильтру недоступна в принципе.
+        # With ECH only the outer name is on the wire: the parser honestly returns it,
+        # not the hidden target. Hidden targets are fundamentally out of SNI-filter reach.
         self.assertEqual(sni.extract_sni(build_hello(["cover.example"])), "cover.example")
 
 

@@ -1,4 +1,4 @@
-# ---> beton: рабочие артефакты, не релиз
+# ---> beton: working artifacts, not the release
 vm/beton-vm.raw
 vm/snaps/
 vm/OVMF_VARS*.fd

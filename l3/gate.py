@@ -1,12 +1,12 @@
-"""L3 gate: предполётные проверки церемонии финализации. Только чтение, без root
-ничего не меняет (проверки root/VM просто вернут FAIL).
+"""L3 gate: preflight checks for the finalization ceremony. Read-only; without root
+it changes nothing (root/VM checks simply return FAIL).
 
-Церемония запускается только в VM под root при наличии:
-  /etc/beton/ALLOW_FINAL   — строка: Я ПРИНИМАЮ НЕОБРАТИМОСТЬ <дата>
-  /etc/beton/VM_MATRIX_OK  — подпись прогона матрицы из VM_TESTS.md
-  /var/lib/beton/           — установленный блок + бэкап pre-apply
+The ceremony runs only in a VM as root with:
+  /etc/beton/ALLOW_FINAL   — line: I ACCEPT IRREVERSIBILITY <date>
+  /etc/beton/VM_MATRIX_OK  — sign-off of the VM_TESTS.md matrix run
+  /var/lib/beton/           — installed block + pre-apply backup
 
-Использование: python3 gate.py [--quiet]; код 0 = можно звать finalize.sh.
+Usage: python3 gate.py [--quiet]; exit 0 = finalize.sh may run.
 """
 from __future__ import annotations
 
@@ -17,13 +17,13 @@ import sys
 ALLOW_FINAL = "/etc/beton/ALLOW_FINAL"
 MATRIX_OK = "/etc/beton/VM_MATRIX_OK"
 DOMAINS = "/var/lib/beton/domains.txt"
-ALLOW_PHRASE = "Я ПРИНИМАЮ НЕОБРАТИМОСТЬ"
+ALLOW_PHRASE = "I ACCEPT IRREVERSIBILITY"
 VM_TYPES = {"qemu", "kvm", "vmware", "virtualbox", "microsoft", "parallels", "bhyve"}
 
 
 def check_root() -> tuple[bool, str]:
     ok = os.geteuid() == 0
-    return ok, "root ok" if ok else "нужен root (запуск только в VM)"
+    return ok, "root ok" if ok else "root required (VM only)"
 
 
 def detect_virt() -> str:
@@ -38,7 +38,7 @@ def check_vm(virt: str | None = None) -> tuple[bool, str]:
     virt = detect_virt() if virt is None else virt
     if virt in VM_TYPES:
         return True, f"VM ok ({virt})"
-    return False, f"не VM (detect-virt={virt}): финализация только в виртуалке"
+    return False, f"not a VM (detect-virt={virt}): finalize in a VM only"
 
 
 EFIVARS_GUID = "8be4df61-93ca-11d2-aa0d-00e098032b8c"
@@ -54,16 +54,16 @@ def read_efivar(name: str) -> int | None:
 
 def check_uefi_setup() -> tuple[bool, str]:
     if not os.path.isdir("/sys/firmware/efi"):
-        return False, "нет UEFI"
+        return False, "no UEFI"
     setup = read_efivar("SetupMode")
     sb = read_efivar("SecureBoot")
     if setup is None:
-        return False, "нет efivars (нужна прошивка с pflash VARS)"
+        return False, "no efivars (firmware with pflash VARS required)"
     if setup == 1:
-        return True, "Setup Mode on — можно enroll (SB включится после)"
+        return True, "Setup Mode on — enroll possible (SB comes after)"
     if sb == 1:
-        return True, "SecureBoot on — ключи уже заведены"
-    return False, "ни Setup Mode, ни SecureBoot: сбрось ключи в прошивке VM (Clear Keys)"
+        return True, "SecureBoot on — keys already enrolled"
+    return False, "neither Setup Mode nor SecureBoot: reset keys in VM firmware (Clear Keys)"
 
 
 def check_allow() -> tuple[bool, str]:
@@ -72,19 +72,19 @@ def check_allow() -> tuple[bool, str]:
             text = f.read()
         if ALLOW_PHRASE in text:
             return True, "ALLOW_FINAL ok"
-        return False, "ALLOW_FINAL без фразы принятия"
+        return False, "ALLOW_FINAL lacks the acceptance phrase"
     except OSError:
-        return False, "нет /etc/beton/ALLOW_FINAL"
+        return False, "missing /etc/beton/ALLOW_FINAL"
 
 
 def check_matrix() -> tuple[bool, str]:
     ok = os.path.isfile(MATRIX_OK)
-    return ok, "VM_MATRIX_OK ok" if ok else "нет /etc/beton/VM_MATRIX_OK (прогони VM_TESTS.md)"
+    return ok, "VM_MATRIX_OK ok" if ok else "missing /etc/beton/VM_MATRIX_OK (run VM_TESTS.md)"
 
 
 def check_state() -> tuple[bool, str]:
     ok = os.path.isfile(DOMAINS)
-    return ok, "блок установлен" if ok else "нет /var/lib/beton/domains.txt (сначала block)"
+    return ok, "block installed" if ok else "missing /var/lib/beton/domains.txt (block first)"
 
 
 def run_all() -> list[tuple[str, bool, str]]:

@@ -1,29 +1,29 @@
-# L3: церемония необратимости (только VM)
+# L3: irreversibility ceremony (VM only)
 
-Замысел: якорь доверия выносится из мутабельной ФС. Root после церемонии
-сильнее не становится — править он может, загрузить правки без подписи нет.
+Concept: the trust anchor moves out of the mutable filesystem. Root does not
+get stronger after the ceremony — it can edit, but cannot boot the edits
+without a signature.
 
-## Состав
-- `gate.py` — 6 предполётных проверок (root, VM, UEFI+SecureBoot, ALLOW_FINAL,
-  VM_MATRIX_OK, установленный блок). Только чтение. На хосте краснеет — так надо.
-- `test_gate.py` — 5 тестов гейта.
-- `finalize.sh` — сама церемония (VM, root, `--i-am-sure`): бандл политики →
-  свежий ключ → UKI → подпись → sbverify → enroll → `shred -u` ключа → FINAL.
-- `initramfs` пара: `mkinitcpio-hook-beton` (run_latehook доливает hosts.block
-  в настоящий корень до switch_root) + `mkinitcpio-install-beton` (упаковка).
-  Ставит сам finalize.sh ДО сборки UKI (иначе новый initramfs не попадёт в образ).
-  Закрывает окно «снёс и перезагрузился быстрее таймера» для имён; nft дотягивает
-  таймер (~30с) — честный остаток, зафиксирован в VM-замерах.
-- Разделение полномочий как фича безопасности: у `beton` НЕТ команды
-  самоуничтожения — только offline-церемония `l3/` с гейтом. Случайно не вызвать.
+## Contents
+- `gate.py` — 6 preflight checks (root, VM, UEFI+SecureBoot, ALLOW_FINAL,
+  VM_MATRIX_OK, installed block). Read-only. Red on the host — by design.
+- `test_gate.py` — 5 gate tests (6 with Setup-Mode parsing).
+- `finalize.sh` — the ceremony itself (VM, root, `--i-am-sure`): policy bundle →
+  fresh key → UKI → sbsign → sbverify → enroll → `shred -u` of the keys → FINAL.
+- Early restore: `mkinitcpio-hook-beton` + `mkinitcpio-install-beton` +
+  `beton-restore.sh` + `beton-restore.service` — a systemd unit inside initramfs
+  restoring hosts before switch-root (run_latehook never fires under a systemd
+  initramfs — proven by missing kmsg; the wants-symlink must be explicit).
+- Separation of powers as a safety feature: `beton` has NO self-destruct command —
+  only the offline `l3/` ceremony with a gate. Cannot be triggered by accident.
 
-## Почему это держит хакера
-1. Переподписать политику/UKI нечем: ключ жил 5 минут и ушёл под shred.
-2. Загрузка неподписанного ядра/образа: SecureBoot отказывает.
-3. LiveUSB: нужен сброс прошивки (пароль не у пользователя) + переустановка.
-4. `revert-for-testing` после FINAL отвечает кодом 4 — функция мертва (`beton:FINAL_FLAG`).
-5. Ранняя стадия загрузки уже восстанавливает блок — гонка с таймером закрыта.
+## Why this holds against a hacker
+1. Nothing to re-sign with: the key lived minutes and went under shred.
+2. Booting an unsigned kernel/image: Secure Boot refuses.
+3. LiveUSB: needs a firmware reset (password not held by the user) + reinstall.
+4. `revert-for-testing` after FINAL answers code 4 — the function is dead.
+5. Early boot stage already restores the block — the race with the timer is closed.
 
-## Что НЕ обещаем (см. FORTRESS.md)
-Второй девайс, новое зеркало с новым доменом+IP, физический сброс батарейки.
-`/home` церемония не трогает никогда.
+## What we do NOT promise (see FORTRESS.md)
+Second device, brand-new mirror with new domain+IP, physical BIOS battery reset.
+The ceremony never touches `/home`.

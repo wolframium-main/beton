@@ -1,14 +1,14 @@
-"""L2 NFQUEUE-демон — второй носитель SNI-фильтра. ЗАПУСК ТОЛЬКО В VM ПОД ROOT.
+"""L2 NFQUEUE daemon — the second SNI-filter carrier. RUN ONLY IN A VM AS ROOT.
 
-Логика решения (verdict_for_payload) — чистый Python, тестируется без root.
-Сеть (netfilterqueue) импортируется только в main(), в тестах не нужен.
+Verdict logic (verdict_for_payload) is pure Python, tested without root.
+Networking (netfilterqueue) is imported only in main(), tests do not need it.
 
-Как давит: nft отправляет TCP->443 в очередь, демон вытаскивает TLS payload,
-sni.extract_sni решает. Переименование бинаря/портативка не помогают:
-смотрится соединение, а не процесс.
+How it squeezes: nft sends TCP->443 to the queue, the daemon extracts the TLS payload,
+sni.extract_sni decides. Renamed binaries/portables do not help:
+the connection is watched, not the process.
 
-Честные зазоры — те же, что у TC-фильтра (см. l2/README.md): ECH, фрагментация.
-Этот демон и есть заявленный фолбэк на случай войны с верифаером.
+Honest gaps — same as the TC filter (see l2/README.md): ECH, fragmentation.
+This daemon is the declared fallback in case of war with the verifier.
 """
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ ACCEPT = "accept"
 
 
 def tls_payload_of_ipv4(packet: bytes) -> tuple[bytes, int] | None:
-    """Вернуть (tls_payload, dport) для IPv4/TCP, иначе None. Строго по границам."""
+    """Return (tls_payload, dport) for IPv4/TCP, else None. Strictly within bounds."""
     if len(packet) < 20 or (packet[0] >> 4) != 4:
         return None
     ihl = (packet[0] & 0x0F) * 4
@@ -44,8 +44,8 @@ def tls_payload_of_ipv4(packet: bytes) -> tuple[bytes, int] | None:
 
 
 def verdict_for_payload(packet: bytes, blocked_bases: set[str] | list[str]) -> str:
-    """DROP только для ClientHello с запрещенным SNI. Всё остальное — ACCEPT
-    (невидимость: чужой трафик не трогаем вообще)."""
+    """DROP only for ClientHello with a banned SNI. Everything else — ACCEPT
+    (invisibility: foreign traffic untouched at all)."""
     parsed = tls_payload_of_ipv4(packet)
     if parsed is None:
         return ACCEPT
@@ -68,28 +68,28 @@ def load_bases(path: str) -> set[str]:
 
 def main() -> int:
     import argparse
-    ap = argparse.ArgumentParser(description="beton L2 NFQUEUE (только VM, только root)")
+    ap = argparse.ArgumentParser(description="beton L2 NFQUEUE (VM only, root only)")
     ap.add_argument("--queue", type=int, default=7)
-    ap.add_argument("--bases-file", required=True, help="файл с базовыми доменами")
+    ap.add_argument("--bases-file", required=True, help="file with base domains")
     a = ap.parse_args()
     if os.geteuid() != 0:
-        print("только root и только в VM")
+        print("root only and VM only")
         return 2
     try:
         from netfilterqueue import NetfilterQueue
     except ImportError:
-        print("VM: поставь python-netfilterqueue; логика проверяется test_nfqueue.py без него")
+        print("VM: install python-netfilterqueue; logic is covered by test_nfqueue.py without it")
         return 2
     bases = load_bases(a.bases_file)
     if not bases:
-        print("пустой bases-file")
+        print("empty bases-file")
         return 2
 
     def cb(pkt):
         v = verdict_for_payload(pkt.get_payload(), bases)
         pkt.drop() if v == DROP else pkt.accept()
 
-    print(f"L2 NFQUEUE: очередь {a.queue}, баз {len(bases)}. Ctrl+C — стоп (VM).")
+    print(f"L2 NFQUEUE: queue {a.queue}, {len(bases)} bases. Ctrl+C stops (VM).")
     print("nft glue (VM, root): tcp dport 443 queue num 7")
     q = NetfilterQueue()
     q.bind(a.queue, cb)

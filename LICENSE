@@ -22,7 +22,7 @@ SOFTWARE.
 
 ---
 
-ДОПОЛНИТЕЛЬНОЕ ПРЕДУПРЕЖДЕНИЕ (не часть лицензии, а просьба автора):
-beton в режиме финализации НЕОБРАТИМ по дизайну. Ставь только на свою машину,
-только с бэкапом, только после прогона VM_TESTS.md. Автор не несёт
-ответственности за заблокированные системы.
+ADDITIONAL WARNING (not part of the license, an author request):
+beton is IRREVERSIBLE by design once finalized. Use only on your own machine,
+only with a backup, only after running VM_TESTS.md. The author is not
+liable for locked systems.

@@ -1,9 +1,9 @@
-"""lab-dns.py — карманный DNS для стенда. Отвечает только тестовые зоны, остальное REFUSED.
-Слушает 0.0.0.0:53 (нужен root: запуск через pkexec). UDP-сокет гостя до 10.0.2.2 доходит.
+"""lab-dns.py — pocket DNS for the lab. Answers only the test zones, REFUSED otherwise.
+Listens on 0.0.0.0:53 (needs root: launch via pkexec). The guest UDP socket reaches 10.0.2.2.
 
-Зоны:
-  megablock.test, *.megablock.test -> 192.0.2.10   (цель блока L1/L2)
-  fine.test, *.fine.test             -> 192.0.2.20   (контроль, всегда жив)
+Zones:
+  megablock.test, *.megablock.test -> 192.0.2.10   (L1/L2 block target)
+  fine.test, *.fine.test             -> 10.0.2.2      (live control, see below)
 """
 import socket
 import struct
@@ -11,8 +11,8 @@ import sys
 
 ZONES = {
     b"megablock.test": "192.0.2.10",
-    # fine.test — живой контроль: резолвится в сам хост стенда (slirp: 10.0.2.2),
-    # где слушают lab-tls :18443 и lab-http :18080.
+    # fine.test — live control: resolves to the lab host itself (slirp: 10.0.2.2),
+    # where lab-tls :18443 and lab-http :18080 listen.
     b"fine.test": "10.0.2.2",
 }
 

@@ -1,56 +1,60 @@
-# VM-прогоны (обязательно до запуска на живой системе)
+# VM runs (mandatory before touching a live system)
 
-Требуется: VM Arch со снапшотом «до beton», доступ в интернет, 2 терминала.
+Requires: Arch VM with a "before beton" snapshot, internet access, 2 terminals.
 
-## 0. База
-- [ ] Снапшот VM. `python3 test_beton.py` — 18/18 OK, `l2/test_sni.py` 12/12, `l2/test_nfqueue.py` 6/6.
-- [ ] `./beton dry-run <твои сайты>` — план без изменений.
+## 0. Base
+- [ ] VM snapshot. `python3 test_beton.py` — 21/21 OK, `l2/test_sni.py` 12/12,
+      `l2/test_nfqueue.py` 6/6, `l3/test_gate.py` 6/6.
+- [ ] `./beton dry-run <your sites>` — plan without changes.
 
-## 1. Установка
-- [ ] `sudo ./beton block <сайты> --yes-i-understand-this-is-forever --countdown 3`
+## 1. Install
+- [ ] `sudo ./beton block <sites> --yes-i-understand-this-is-forever --countdown 3`
 - [ ] `sudo ./beton status` — hosts OK, nft OK, timer active.
-- [ ] Сайт мертв: `getent hosts <домен>` = 0.0.0.0, браузер показывает timeout, не блок-страницу.
+- [ ] Site dead: `getent hosts <domain>` = 0.0.0.0, browser shows timeout, not a block page.
 
-## 2. Матрица атак (каждая должна проиграть; фиксировать время взлома)
-- [ ] `sudo sed -i` вырезать блок из /etc/hosts → за 30 сек блок вернулся, в логе enforce.
-- [ ] `sudo nft flush ruleset` / delete table → таблица вернулась.
-- [ ] `sudo systemctl stop beton-enforce.timer` + снос → после `enforce` всё восстановлено.
-- [ ] Поставить tor после установки и запустить → процесс убит, в логе kill.
-- [ ] Переименованный бинарь туннеля (другой comm) → ИЗВЕСТНЫЙ ЗАЗОР MVP: фиксируем,
-      закрывается только eBPF-фильтром коннекта (FORTRESS L2).
-- [ ] `ssh -D` SOCKS-туннель → ИЗВЕСТНЫЙ ЗАЗОР MVP: фиксируем время/факт обхода.
-- [ ] Хардкод-DNS 8.8.8.8:53 в приложении → дроп по pubdns-сету.
-- [ ] Портативный браузер (AppImage/распаковка в /tmp) → политики мимо, hosts+nft держат;
-      фиксируем как зазор до eBPF.
-- [ ] Brave/Vivaldi/Opera/Firefox-ESR → политики на месте.
-- [ ] Разрешенный процесс из allowlist (записать имя в /var/lib/beton/allowlist-procs.txt) → НЕ убит.
-- [ ] 3 сноса за 10 мин → punish активен (`status`), QUIC режется, через 15 мин автоснятие.
-- [ ] Смена DNS на 8.8.8.8 → заблокированные имена всё равно мертвы.
-- [ ] Второй браузер без политик → hosts+nft всё равно держат.
-- [ ] `sudo ./beton revert-for-testing` → чисто: hosts без меток, таблиц нет, таймера нет.
+## 2. Attack matrix (each must lose; record hack time)
+- [ ] `sudo sed -i` cutting the block out of /etc/hosts → back within 30s, enforce in log.
+- [ ] `sudo nft flush ruleset` / delete table → table back.
+- [ ] `sudo systemctl stop beton-enforce.timer` + removal → `enforce` restores everything.
+- [ ] Install tor after setup and run it → process killed, kill in log.
+- [ ] Renamed tunnel binary (different comm) → KNOWN MVP GAP: record it,
+      closed only by the eBPF connection filter (FORTRESS L2).
+- [ ] `ssh -D` SOCKS tunnel → KNOWN MVP GAP: record time/fact of bypass.
+- [ ] Hardcoded 8.8.8.8:53 DNS in an app → dropped by the pubdns set.
+- [ ] Portable browser (AppImage//tmp unpack) → policies miss, hosts+nft hold;
+      record as pre-eBPF gap.
+- [ ] Brave/Vivaldi/Opera/Firefox-ESR → policies in place.
+- [ ] Live browser check (Chromium headless): bare-hostname entries block the target
+      and subdomains, control host alive (scheme-only patterns are ignored by
+      Chrome 153 — keep both formats: bare for Chrome, scheme for Firefox).
+- [ ] Allowlisted process (name in /var/lib/beton/allowlist-procs.txt) → NOT killed.
+- [ ] 3 removals in 10 min → punish active (`status`), QUIC throttled, auto-lift after 15 min.
+- [ ] DNS switched to 8.8.8.8 → blocked names still dead.
+- [ ] Second browser without policies → hosts+nft still hold.
+- [ ] `sudo ./beton revert-for-testing` → clean: no markers in hosts, no tables, no timer.
 
-## 3. L2 в VM (два носителя, замер времени взлома)
-- [ ] `test_sni.py` 12/12, `test_nfqueue.py` 6/6, `gen-ebpf` совпадает с codegen.
-- [ ] TC: `build.sh` → `--attach eth0` → `curl youtube.com` рвётся, `example.com` 200.
-- [ ] Переименованный туннель и портативка из /tmp → коннект к запрету мёртв.
-- [ ] ECH-цель → фиксируем факт проскока SNI-слоя, проверяет DNS/IP-подхват.
-- [ ] NFQUEUE: демон на очереди 7 → те же 4 проверки. Выбираем носитель с
-      меньшим процентом проскоков; второй остаётся фолбэком.
+## 3. L2 in VM (two carriers, hack-time measurement)
+- [ ] `test_sni.py` 12/12, `test_nfqueue.py` 6/6, `gen-ebpf` matches codegen.
+- [ ] TC: `build.sh` → `--attach eth0` → `curl youtube.com` dies, `example.com` 200.
+- [ ] Renamed tunnel and /tmp portable → connection to the target dead.
+- [ ] ECH target → record SNI-layer miss, DNS/IP pickup verified.
+- [ ] NFQUEUE: daemon on queue 7 → same 4 checks. Pick the carrier with fewer
+      misses; the other stays as fallback.
 
-## 4. Невидимость (пока не атакуешь)
-- [ ] Обычные сайты открываются без замедления и попапов.
-- [ ] `pacman -Syu` работает, хук молча отрабатывает.
-- [ ] Перезагрузка → блок на месте.
+## 4. L3 ceremony in VM (with snapshot; host — never)
+- [ ] `python3 l3/gate.py` red before install (proof of the gate).
+- [ ] Setup Mode + SecureBoot on in VM firmware; `block` + matrix §2–§4 green.
+- [ ] ALLOW_FINAL + VM_MATRIX_OK → `finalize.sh --i-am-sure` → key shred in log.
+- [ ] Reboot: signed UKI boots, SecureBoot on, block in place.
+- [ ] `revert-for-testing` → refusal with code 4. hosts+nft removal + reboot →
+      initramfs restored before network, timer covers the rest.
 
-## 5. L3-церемония в VM (со снапшотом; хост — никогда)
-- [ ] `python3 l3/gate.py` красный до установки (доказательство гейта).
-- [ ] Setup Mode + SecureBoot on в прошивке VM; `block` + матрица §2–§4 зелёные.
-- [ ] ALLOW_FINAL + VM_MATRIX_OK → `finalize.sh --i-am-sure` → shred ключа в логе.
-- [ ] Перезагрузка: signed UKI грузится, SecureBoot on, блок на месте.
-- [ ] `revert-for-testing` → отказ кодом 4. Снос hosts+nft+перезагрузка → initramfs
-      восстановил до сети, таймер дотянул остальное.
+## 5. Invisibility (while not attacking)
+- [ ] Normal sites open with no slowdown and no popups.
+- [ ] `pacman -Syu` works, hook runs silently.
+- [ ] Reboot → block in place.
 
-## 6. Стоп-условия релиза
-- [ ] `block google.com` без флага — отказ с объяснением.
-- [ ] Ни один прогон не тронул /home.
-- [ ] Логи только локальные (/var/log/beton.log), сетевых отправок нет.
+## 6. Release stop-conditions
+- [ ] `block google.com` without the flag — refusal with explanation.
+- [ ] No run touched /home.
+- [ ] Logs only local (/var/log/beton.log), no network exfiltration.

@@ -1,40 +1,46 @@
-# Замеры стенда (VM qemu/kvm, герметичный lab-DNS/TLS, 2026-09-13)
+# Lab measurements (VM qemu/kvm, hermetic lab-DNS/TLS, 2026-09-13)
 
 ## L1 (userspace)
-- apply: hosts OK, nft OK (сет 192.0.2.10 из lab-DNS), timer active, backup создан
-- снос hosts+nft руками → автовосстановление таймером (~30–50с в VM), tamper=1 в логе
-- ручной enforce → восстановление + tamper++
-- киллер: /tmp/tor (comm=tor, exe новее установки) убит, запись в лог
-- allowlist: tor в списке → пережил enforce
-- 3 сноса/10мин → punish АКТИВЕН (таблица beton_punish, QUIC-drop), автоснятие по сроку
-- pacman -U → хук отработал (enforce, молча т.к. compliant)
-- curl: megablock.test → getent 0.0.0.0 + 000; fine.test → 200 (и под punish тоже 200)
-- revert → чисто (hosts без меток, таблиц нет, таймера нет)
-- НАХОДКА: `enable --now` после reinstall оставляет таймер в elapsed без тиков.
-  Исправлено в beton: enable + restart с проверкой (код + повторный замер OK).
+- apply: hosts OK, nft OK (set holds 192.0.2.10 from lab DNS), timer active, backup made
+- manual hosts+nft removal → timer auto-restore (~30–50s in VM), tamper=1 in log
+- manual enforce → restore + tamper++
+- killer: /tmp/tor (comm=tor, exe newer than install) killed, logged
+- allowlist: listed tor survived enforce
+- 3 removals/10min → punish ACTIVE (beton_punish table, QUIC-drop), auto-lift on expiry
+- pacman -U → hook fired (enforce, silent since compliant)
+- curl: megablock.test → getent 0.0.0.0 + 000; fine.test → 200 (200 under punish too)
+- revert → clean (no hosts markers, no tables, no timer)
+- FINDING: `enable --now` after reinstall leaves the timer elapsed with no ticks.
+  Fixed in beton: enable + restart with check (code + re-measured OK).
+- FINDING: Chrome 153 ignores `*://` URLBlocklist patterns; bare hostnames block
+  exact host + subdomains (measured matrix). Generator emits both formats
+  (bare for Chrome, scheme for Firefox).
 
-## L2 (eBPF TC egress, паттерн megablock.test, порт стенда 18443)
-- v1 substring: цель 000, но и notmegablock.test 000 (ложняк) → переписано на парсинг SNI
-- v2 SNI-парсер: megablock.test 000, music.megablock.test 000,
-  fine.test 200 за ~4мс, notmegablock.test 200
-- по пути пойманы и исправлены: отсутствие linux/in.h, окно 512Б мало под реальные
-  hello (стало 1024 + clamp min(ext_end,end)), порт параметризован (BETON_PORT)
-- верифаер пропустил обе версии; v2 прицеплен и замерен
+## L2 (eBPF TC egress, pattern megablock.test, lab port 18443)
+- v1 substring: target dead, but notmegablock.test dead too (false positive) →
+  rewritten to real SNI parsing
+- v2 SNI parser: megablock.test 000, music.megablock.test 000,
+  fine.test 200 in ~4ms, notmegablock.test 200
+- fixed along the way: missing linux/in.h, 512B window too small for real hellos
+  (now 1024 + min(ext_end,end) clamp), parameterized port (BETON_PORT)
+- verifier accepted both versions; v2 attached and measured
+- live Chromium vs policy layer: target+sub BLOCKED-BY-POLICY, control alive
 
-## L3 — финализация в VM (SecureBoot + custom keys + signed UKI)
-- гейт: 6 проверок; на хосте красный, в VM зелёный (Setup Mode → enroll → SB on)
-- церемония: бандл SHA256 → sbctl create-keys → ukify → sbsign → sbverify →
-  enroll-keys --custom --tpm-eventlog (swtpm в VM) → shred всего /var/lib/sbctl →
-  FINAL → boot-запись. EXIT:0
-- после: ключей нет нигде (find), revert отвечает кодом 4, boot-запись первая
-- перезагрузка: SecureBoot Enabled, BootCurrent=signed UKI, cmdline beton.final=1,
-  блок (hosts/nft/timer) пережил
-- раннее восстановление: systemd-юнит beton-restore.service в initramfs
-  (run_latehook под systemd НЕ вызывается — доказано отсутствием kmsg;
-  wants-симлинк делать явно — add_systemd_unit его не ставит)
-- замер окна: снос hosts+nft + мгновенный ребут → на t+25с (nft ещё PENDING,
-  таймер не тикал) hosts уже восстановлен юнитом, getent 0.0.0.0
-- полевые находки и фиксы: pipefail+head (SIGPIPE 141), ESP-парсинг через
-  lsblk PKNAME + /sys (не sed), efi-копия в ESP только после успеха enroll,
-  unlock в начале apply, enable+restart таймера, микродод необязателен,
-  shebang sh в initramfs, rm юнита из живой системы после упаковки
+## L3 — finalization in VM (SecureBoot + custom keys + signed UKI)
+- gate: 6 checks; red on host, green in VM (Setup Mode → enroll → SB on)
+- ceremony: SHA256 bundle → sbctl create-keys → ukify → sbsign → sbverify →
+  enroll-keys --custom --tpm-eventlog (swtpm in VM) → shred of /var/lib/sbctl →
+  FINAL → boot entry. EXIT:0
+- after: no keys anywhere (find), revert answers 4, boot entry first
+- reboot: SecureBoot Enabled, BootCurrent=signed UKI, cmdline beton.final=1,
+  block (hosts/nft/timer) survived
+- early restore: systemd unit beton-restore.service in initramfs
+  (run_latehook never fires under systemd — proven by missing kmsg;
+  wants-symlink must be explicit — add_systemd_unit does not create it)
+- window measurement: hosts+nft removal + instant reboot → at t+25s (nft still
+  PENDING, timer not ticked yet) hosts already restored by the unit,
+  getent 0.0.0.0
+- field fixes: pipefail+head (SIGPIPE 141), ESP parsing via sysfs
+  (PKNAME + /sys partition, not sed), ESP copy only after enroll success,
+  unlock at apply start, enable+restart timer, optional microcode,
+  sh shebang in initramfs, unit removed from live system after packing

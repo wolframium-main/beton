@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# boot-sb.sh — запуск VM с SecureBoot-прошивкой (для L3). Без root.
-# VARS приватные (копия шаблона), лежат в vm/, в репозиторий не коммитятся.
+# boot-sb.sh — boot the VM with SecureBoot firmware (for L3). No root.
+# VARS are private (template copy), live in vm/, never committed.
 set -euo pipefail
 VM_DIR="$(dirname "$0")"
 IMG="$VM_DIR/beton-vm.raw"
@@ -10,18 +10,18 @@ VARS="$VM_DIR/OVMF_VARS.beton.fd"
 PIDF="$VM_DIR/qemu.pid"
 LOG="$VM_DIR/serial.log"
 
-[[ -f "$IMG" ]] || { echo "нет образа"; exit 2; }
+[[ -f "$IMG" ]] || { echo "no image"; exit 2; }
 if [[ -f "$PIDF" ]] && kill -0 "$(cat "$PIDF")" 2>/dev/null; then
-  echo "VM уже запущена"; exit 0
+  echo "VM already running"; exit 0
 fi
-[[ -f "$VARS" ]] || { cp "$VARS_TPL" "$VARS"; echo "VARS созданы: $VARS"; }
+[[ -f "$VARS" ]] || { cp "$VARS_TPL" "$VARS"; echo "VARS created: $VARS"; }
 
 TPMDIR="$VM_DIR/tpm"
 mkdir -p "$TPMDIR"
 if ! pgrep -f "swtpm socket.*$TPMDIR" >/dev/null 2>&1; then
   swtpm socket --tpmstate dir="$TPMDIR" --ctrl type=unixio,path="$TPMDIR/swtpm.sock" \
     --tpm2 --daemon --pid file="$TPMDIR/swtpm.pid"
-  echo "swtpm запущен"
+  echo "swtpm started"
 fi
 
 qemu-system-x86_64 \
@@ -35,5 +35,5 @@ qemu-system-x86_64 \
   -nic user,model=e1000,hostfwd=tcp::2222-:22 \
   -display none -serial file:"$LOG" \
   -daemonize -pidfile "$PIDF"
-echo "VM(SB) стартует. Лог: $LOG"
+echo "VM(SB) starting. Log: $LOG"
 "$VM_DIR/wait-ssh.sh"

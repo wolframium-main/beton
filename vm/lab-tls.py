@@ -1,16 +1,17 @@
-"""lab-tls.py — карманный HTTPS для L2-замеров. Один сервер, любое SNI принимает,
-отвечает 200 OK с именем из SNI (прочитано грубым поиском hostname в ClientHello).
-Слушает 0.0.0.0:18443 (без root). Сертификат lab-cert.pem рядом НЕ коммитится
-(приватный ключ!); регенерация:
+"""lab-tls.py — pocket HTTPS for L2 measurements. One server, accepts any SNI,
+answers 200 OK with the SNI name (found by crude hostname search in ClientHello).
+Listens on 0.0.0.0:18443 (no root). lab-cert.pem next to it is NOT committed
+(private key!); regenerate:
   openssl req -x509 -newkey rsa:2048 -nodes -keyout lab-cert.pem -out lab-cert.pem -days 2 -subj "/CN=fine.test"
 
-Гость: curl -k https://megablock.test:18443/ --resolve megablock.test:18443:10.0.2.2
+Guest: curl -k https://megablock.test:18443/ --resolve megablock.test:18443:10.0.2.2
 """
+import os
 import socket
 import ssl
 import threading
 
-CERT = "/home/wolframium/Проекты/beton/vm/lab-cert.pem"
+CERT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lab-cert.pem")
 PORT = 18443
 HTTP_PORT = 18080
 

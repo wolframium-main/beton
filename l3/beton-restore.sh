@@ -1,7 +1,7 @@
 #!/bin/sh
-# beton-restore: выполняется юнитом beton-restore.service в initramfs
+# beton-restore: runs via the beton-restore.service unit in initramfs
 # (After=sysroot.mount, Before=initrd-switch-root.target).
-# Доливает hosts.block в /sysroot/etc/hosts. Только POSIX.
+# Pours hosts.block into /sysroot/etc/hosts. POSIX only.
 echo "beton-restore: start" > /dev/kmsg 2>/dev/null || true
 if [ ! -f /etc/beton/hosts.block ]; then
     echo "beton-restore: no hosts.block" > /dev/kmsg 2>/dev/null || true

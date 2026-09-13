@@ -1,45 +1,49 @@
-# beton 0.1.0 — невидимый сторож
+# beton 0.1.1 — the invisible guard dog
 
-Одна команда. Думать не надо. В обычной жизни меня нет: ноль иконок, ноль попапов.
-Сайты-цели выглядят мёртвыми. Попытка обхода или сноса — молча убита и откачена.
+**beton permanently blocks websites you choose. Removing the block requires
+reinstalling the OS — that is the design, not a bug.**
 
-**ВНИМАНИЕ: после финализации снятие — только переустановкой ОС.**
-Ставь только на свою машину, только с бэкапом. Сначала `VM_TESTS.md`.
+One command, no thinking required. In normal life it does not exist: no icons,
+no popups, everything else untouched. Target sites just look dead. Any attempt
+to bypass or remove it is silently killed and rolled back.
 
-## Быстрый старт (Arch)
+> **WARNING: after finalization there is no undo.** Use only on your own machine,
+> only with a backup. Run `VM_TESTS.md` first.
+
+## Quick start (Arch Linux)
 
 ```
-./install.sh                 # положить в /usr/local/bin (блок не применяет)
-./beton dry-run youtube.com  # план без изменений, без sudo
-sudo ./beton                 # интерактив: спросит сайты и всё сделает сам
-sudo ./beton status          # проверить что держит
+./install.sh              # installs to /usr/local/bin (applies nothing)
+./beton dry-run youtube.com   # shows the plan, changes nothing, no sudo needed
+sudo ./beton              # interactive: asks for sites and does everything itself
+sudo ./beton status       # check that it holds
 ```
 
-## Как держит (6 слоёв, все замерены в VM — см. vm/RESULTS.md)
+## How it holds (6 layers, all measured in a VM — see vm/RESULTS.md)
 
-1. DNS/hosts + nft (IP/DoT/DoH/вшитый DNS) — имена мертвы везде
-2. Политики браузеров (Chromium/Firefox/ESR/Brave/Vivaldi/Opera)
-3. Сторож systemd 30с + pacman-хук + ранний юнит в initramfs
-4. Киллер обходов, поставленных после установки (allowlist для рабочих)
-5. Лестница: молчаливый restore → упорство → QUIC-наказание с автоснятием
-6. L2 eBPF SNI-фильтр + L3 церемония необратимости (Secure Boot, ключ уничтожен)
+1. DNS/hosts + nftables (IP / DoT / DoH / hardcoded-DNS) — names are dead everywhere
+2. Browser enterprise policies (Chromium / Firefox / ESR / Brave / Vivaldi / Opera)
+3. systemd watchdog (30s) + pacman hook + early-boot unit in initramfs
+4. Killer of bypass tools installed *after* setup (allowlist for your work tools)
+5. Escalation ladder: silent restore → persistence → temporary QUIC punishment
+6. L2 eBPF SNI filter + L3 finalization ceremony (Secure Boot, signing key destroyed)
 
-## Откат
+## Rollback
 
-- До финала (тесты в VM): `sudo ./beton revert-for-testing`
-- После `l3/finalize.sh`: отката нет, revert отвечает кодом 4
+- Before finalization (VM tests): `sudo ./beton revert-for-testing`
+- After `l3/finalize.sh`: no rollback, `revert` answers with exit code 4
 
-## Честные границы
+## Honest limits
 
-Второй девайс, новое зеркало с новым доменом+IP, физический сброс BIOS —
-вне периметра одного ПК. ECH-цели SNI-фильтр не видит (ловят DNS/IP-слои).
-Подробности: FORTRESS.md, STAGE2.md, l2/README.md, l3/README.md.
+A second device, a brand-new mirror with a new domain+IP, or a physical BIOS
+reset are outside one PC's perimeter. ECH hides the real SNI (DNS/IP layers
+catch it instead). Details: FORTRESS.md, STAGE2.md, l2/README.md, l3/README.md.
 
-## Состав
+## Layout
 
-- `beton` — сама утилита (только stdlib), `test_beton.py` — 21+ тестов
-- `l2/` — SNI-ядро, eBPF-фильтр, NFQUEUE-демон, codegen
-- `l3/` — гейт и церемония финализации (только VM)
-- `vm/` — стенд: скрипты VM, lab-DNS/TLS, матрица, замеры
+- `beton` — the tool itself (stdlib only), `test_beton.py` — 21+ tests
+- `l2/` — SNI core, eBPF filter, NFQUEUE daemon, codegen
+- `l3/` — gate and finalization ceremony (VM only)
+- `vm/` — lab: VM scripts, lab DNS/TLS, attack matrix, measurements
 
-Лицензия: MIT (см. LICENSE).
+License: MIT (see LICENSE).

@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
-"""beton — невидимый сторож. Одна команда блокирует сайты навсегда (MVP).
+"""beton — the invisible guard dog. One command blocks sites forever (MVP).
 
-Принцип: в обычной жизни его нет. Убивает только атаку на блок.
-MVP безопасный: всё обратимо через `beton revert-for-testing`.
-Финальная неснимаемость (verity+SecureBoot+уничтожение ключа) — только Stage 2
-флагом --final-irreversible, который в MVP заблокирован.
+Principle: in normal life it does not exist. It kills only attacks on the block.
+Safe MVP: everything is reversible via `beton revert-for-testing`.
+Final irreversibility (verity+SecureBoot+key destruction) — Stage 2 only
+via the --final-irreversible flag, locked in the MVP.
 
-Использование (простое):
-  sudo ./beton                      # интерактив: спросит сайты и всё сделает сам
+Simple usage:
+  sudo ./beton                      # interactive: asks for sites, does everything itself
   sudo ./beton block youtube.com tiktok.com --yes-i-understand-this-is-forever
-  ./beton dry-run youtube.com       # ничего не меняет, только показывает план
+  ./beton dry-run youtube.com       # changes nothing, only shows the plan
   sudo ./beton status
-  sudo ./beton enforce              # молча восстановить (вызывает systemd-таймер)
-  sudo ./beton revert-for-testing   # ТОЛЬКО для тестов в VM, в финале будет удалено
+  sudo ./beton enforce              # silently restore (called by the systemd timer)
+  sudo ./beton revert-for-testing   # VM TESTS ONLY, removed in the final
 
-Зависимости: только Python stdlib. Система: Arch Linux, nftables, systemd.
+Dependencies: Python stdlib only. System: Arch Linux, nftables, systemd.
 """
 from __future__ import annotations
 import argparse
@@ -28,7 +28,7 @@ import sys
 import time
 
 APP = "beton"
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 HOSTS = "/etc/hosts"
 STATE_DIR = "/var/lib/beton"
 DOMAINS_FILE = os.path.join(STATE_DIR, "domains.txt")
@@ -40,8 +40,8 @@ TIMER = "/etc/systemd/system/beton-enforce.timer"
 PACMAN_HOOK = "/etc/pacman.d/hooks/90-beton.hook"
 LOG = "/var/log/beton.log"
 
-# Флаг финализации: ставит только l3/finalize.sh в VM-церемонии.
-# После него revert-for-testing мёртв: снять можно лишь переустановкой.
+# Finalization flag: set only by l3/finalize.sh in the VM ceremony.
+# After it revert-for-testing is dead: removal only via reinstall.
 FINAL_FLAG = "/etc/beton/FINAL"
 
 
@@ -51,20 +51,20 @@ def is_final() -> bool:
 MARK_BEGIN = "# >>> BETON >>>"
 MARK_END = "# <<< BETON <<<"
 
-# Известные DoH-терминалы, блокируем только их :443 + DoT 853.
-# Обычный HTTPS не трогаем — сторож невидим для остального.
+# Known DoH endpoints: block only their :443 + DoT 853.
+# Regular HTTPS untouched — the guard stays invisible otherwise.
 DOH_IPS = ["1.1.1.1", "1.0.0.1", "8.8.8.8", "8.8.4.4", "9.9.9.9", "149.112.112.112"]
 
-# Стоп-лист: закрытие этих баз ломает пол-интернета (общий CDN/инфра).
-# Требует отдельный флаг --i-know-this-breaks-half-internet.
+# Stoplist: closing these bases breaks half the internet (shared CDN/infra).
+# Requires the separate --i-know-this-breaks-half-internet flag.
 DANGEROUS_BASES = {
     "google.com", "gstatic.com", "googleapis.com", "gvt1.com",
     "cloudflare.com", "cloudflare-dns.com", "amazonaws.com", "microsoft.com",
     "apple.com", "fbcdn.net",
 }
 
-# Процессы-обходы: убиваются только если бинарник появился ПОСЛЕ установки
-# (т.е. поставлен ради обхода) и его нет в allowlist. Рабочее, стоявшее до нас, живет.
+# Bypass processes: killed only if the binary appeared AFTER setup
+# (i.e. installed to bypass) and is not in the allowlist. Pre-existing work tools live.
 BYPASS_PROC_NAMES = {
     "tor", "torsocks", "openvpn",
     "wireguard", "wg-quick",
@@ -89,11 +89,11 @@ FIREFOX_POLICIES = [
     "/usr/lib/firefox-esr/distribution/policies.json",
 ]
 
-# Хардкод-DNS: убиваем обход через вшитый 8.8.8.8/1.1.1.1 в приложении.
-# Системный резолвер по DHCP продолжает работать — остальное не трогаем.
+# Hardcoded DNS: kill bypass via baked-in 8.8.8.8/1.1.1.1 in apps.
+# The DHCP system resolver keeps working — the rest untouched.
 PUBLIC_DNS_IPS = ["1.1.1.1", "1.0.0.1", "8.8.8.8", "8.8.4.4", "9.9.9.9", "149.112.112.112"]
 
-FOREVER_PHRASE = "Я ПОНИМАЮ ЧТО ОБРАТНО ТОЛЬКО ЧЕРЕЗ ПЕРЕУСТАНОВКУ"
+FOREVER_PHRASE = "I UNDERSTAND THIS IS FOREVER"
 
 
 def log(msg: str) -> None:
@@ -121,11 +121,11 @@ def normalize_domain(raw: str) -> str:
     if d.startswith("www."):
         d = d[4:]
     if not d or "." not in d or " " in d:
-        raise ValueError(f"плохой домен: {raw!r}")
+        raise ValueError(f"bad domain: {raw!r}")
     try:
         d = d.encode("idna").decode("ascii")
     except Exception as e:
-        raise ValueError(f"плохой домен {raw!r}: {e}")
+        raise ValueError(f"bad domain {raw!r}: {e}")
     return d
 
 
@@ -166,8 +166,8 @@ def find_dangerous(domains: list[str]) -> list[str]:
 
 
 def build_hosts_block(domains: list[str]) -> str:
-    # hosts не понимает wildcard: пишем только точные имена.
-    # Поддомены закрывают политики браузеров + DNS/IP + SNI (Stage 2).
+    # hosts has no wildcards: exact names only.
+    # Subdomains are covered by browser policies + DNS/IP + SNI (Stage 2).
     clean = [MARK_BEGIN]
     for d in domains:
         clean.append(f"0.0.0.0 {d}")
@@ -235,10 +235,10 @@ table inet beton {{
 
 
 def build_chromium_policy(domains: list[str]) -> str:
-    # Два формата разом (проверено матрицей в VM на Chromium 153):
-    # - bare hostname ("example.com"): единственный формат, который Chrome 153
-    #   реально ест в URLBlocklist; покрывает и поддомены. Схемы "*://" он молча
-    #   игнорирует — но они нужны Firefox WebsiteFilter, поэтому оставляем оба.
+    # Two formats at once (measured in-VM on Chromium 153):
+    # - bare hostname ("example.com"): the only format Chrome 153
+    #   actually honors in URLBlocklist; covers subdomains too. "*://" schemes
+    #   are silently ignored — but Firefox WebsiteFilter needs them, so keep both.
     patterns = []
     for d in domains:
         base = d[4:] if d.startswith("www.") else d
@@ -310,9 +310,9 @@ def apply_browser_policies(domains: list[str]) -> None:
         os.makedirs(d, exist_ok=True)
         with open(os.path.join(d, "90-beton.json"), "w", encoding="utf-8") as f:
             f.write(payload)
-    # Firefox (+ESR): мержим WebsiteFilter.Block в существующие policies.json,
-    # остальные ключи не трогаем. Покрывает системные установки; portable/flatpak
-    # с собственными путями закрываются сетевым слоем (hosts+nft), честное ограничение MVP.
+    # Firefox (+ESR): merge WebsiteFilter.Block into existing policies.json,
+    # other keys untouched. Covers system installs; portable/flatpak
+    # with own paths are covered by the network layer (hosts+nft), honest MVP limit.
     firefox_ok = 0
     for policy_path in FIREFOX_POLICIES:
         try:
@@ -330,13 +330,13 @@ def apply_browser_policies(domains: list[str]) -> None:
                 f.write("\n")
             firefox_ok += 1
         except OSError as e:
-            print(f"WARN: firefox policy {policy_path} пропущен: {e}")
+            print(f"WARN: firefox policy {policy_path} skipped: {e}")
     if not firefox_ok:
-        print("WARN: ни один firefox policy не записан")
+        print("WARN: no firefox policy written")
 
 
 SERVICE_TMPL = """[Unit]
-Description=beton — молча восстановить блок
+Description=beton — silently restore the block
 After=network-pre.target
 Before=network.target
 
@@ -385,8 +385,8 @@ def install_self_and_watchdog() -> None:
     with open(PACMAN_HOOK, "w", encoding="utf-8") as f:
         f.write(HOOK_TMPL)
     run(["systemctl", "daemon-reload"])
-    # restart, а не start: после revert+reinstall enable --now оставляет таймер
-    # в зависшем elapsed-состоянии без срабатываний (поймано в VM-матрице).
+    # restart, not start: after revert+reinstall, enable --now leaves the timer
+    # stuck in elapsed state with no ticks (caught in the VM matrix).
     run(["systemctl", "enable", "beton-enforce.timer"])
     r = run(["systemctl", "restart", "beton-enforce.timer"])
     if r.returncode != 0:
@@ -425,7 +425,7 @@ def load_allowlist() -> set[str]:
 
 
 def iter_bypass_candidates() -> list[tuple[int, str]]:
-    """Процессы-обходы, поставленные ПОСЛЕ установки. Рабочее до нас не трогаем."""
+    """Bypass processes installed AFTER setup. Pre-existing work tools untouched."""
     its = install_time()
     if not its:
         return []
@@ -458,7 +458,7 @@ def kill_bypass_processes() -> list[tuple[int, str]]:
         try:
             os.kill(pid, 9)
             killed.append((pid, name))
-            log(f"kill: обходной процесс {name} pid={pid} убит")
+            log(f"kill: bypass process {name} pid={pid} killed")
         except OSError as e:
             log(f"kill FAILED {name} pid={pid}: {e}")
     return killed
@@ -506,8 +506,8 @@ def punish_active() -> bool:
 
 
 def engage_punish(minutes: int = 15) -> None:
-    """Наказание только атакующего контура: режем QUIC/udp443 на время.
-    Обычные сайты уходят в TCP-фолбэк и работают, обходы тормозятся."""
+    """Punishment for the attacking side only: cut QUIC/udp443 for a while.
+    Normal sites fall back to TCP and work, bypasses get slower."""
     until = time.time() + minutes * 60
     try:
         os.makedirs(os.path.dirname(PUNISH_QUIC_NFT), exist_ok=True)
@@ -526,7 +526,7 @@ table inet beton_punish {
             return
         with open(PUNISH_FLAG_FILE, "w", encoding="utf-8") as f:
             f.write(str(until))
-        log(f"punish: QUIC-drop на {minutes} мин за упорную атаку")
+        log(f"punish: QUIC-drop for {minutes} min after persistent attack")
     except OSError as e:
         log(f"punish FAILED: {e}")
 
@@ -540,7 +540,7 @@ def lift_punish_if_expired() -> None:
         pass
     r = run(["nft", "delete", "table", "inet", "beton_punish"])
     if r.returncode == 0:
-        log("punish: срок вышел, QUIC возвращен")
+        log("punish: expired, QUIC back")
 
 
 def load_domains() -> list[str]:
@@ -553,39 +553,39 @@ def cmd_dry_run(raw: list[str]) -> int:
     try:
         domains = expand_domains(raw)
     except ValueError as e:
-        print(f"Ошибка: {e}")
+        print(f"Error: {e}")
         return 2
     ips = resolve_ips(domains)
-    print("== BETON DRY-RUN (система НЕ меняется) ==")
-    print(f"Домены ({len(domains)}): {', '.join(domains)}")
+    print("== BETON DRY-RUN (system UNCHANGED) ==")
+    print(f"Domains ({len(domains)}): {', '.join(domains)}")
     dang = find_dangerous(domains)
     if dang:
-        print(f"!!! СТОП: {', '.join(dang)} — общая инфра, ляжет пол-интернета.")
-        print("!!! Нужен флаг --i-know-this-breaks-half-internet, иначе block откажет.")
-    print(f"IP сейчас резолвятся ({len(ips)}): {', '.join(ips) if ips else '— (DNS не отдал, hosts+политики всё равно закроют имена)'}")
-    print(f"DoH-блок: порты 853 + :443 к {', '.join(DOH_IPS)}")
-    print("--- /etc/hosts добавит ---")
+        print(f"!!! STOP: {', '.join(dang)} — shared infra, this kills half the internet.")
+        print("!!! The --i-know-this-breaks-half-internet flag is required, otherwise block refuses.")
+    print(f"IPs currently resolving ({len(ips)}): {', '.join(ips) if ips else '— (DNS gave nothing, hosts+policies still cover the names)'}")
+    print(f"DoH block: ports 853 + :443 to {', '.join(DOH_IPS)}")
+    print("--- /etc/hosts will gain ---")
     print(build_hosts_block(domains), end="")
     print("--- nft rules ---")
     print(build_nft_rules(domains, ips), end="")
     print("--- chromium policy ---")
     print(build_chromium_policy(domains), end="")
     print("--- watchdog: beton-enforce.service + timer 30s + pacman hook ---")
-    print(f"--- киллер обходов (только поставленные ПОСЛЕ установки, allowlist: {ALLOWLIST_PROCS_FILE}) ---")
+    print(f"--- bypass killer (only installed AFTER setup, allowlist: {ALLOWLIST_PROCS_FILE}) ---")
     print(f"--- {', '.join(sorted(BYPASS_PROC_NAMES))} ---")
-    print("--- лестница: restore молча -> 3 сноса за 10 мин = QUIC-drop на 15 мин (автоснятие) ---")
-    print("OK: dry-run чистый. Для применения: sudo ./beton")
+    print("--- ladder: silent restore -> 3 removals in 10 min = 15 min QUIC-drop (auto-lift) ---")
+    print("OK: dry-run clean. To apply: sudo ./beton")
     return 0
 
 
 def policies_ok(domains: list[str]) -> bool:
-    """Политики на месте? Новый браузер после установки без них — тоже чинка."""
+    """Policies in place? A browser installed after setup without them counts too."""
     try:
         want = set(json.loads(build_chromium_policy(domains))["URLBlocklist"])
     except ValueError:
         return False
     for d in CHROMIUM_POLICY_DIRS:
-        # apply создаёт все эти пути — требовать все: снос любого чинится.
+        # apply creates all these paths — require them all: removing any gets fixed.
         p = os.path.join(d, "90-beton.json")
         try:
             have = set(json.loads(open(p, encoding="utf-8").read()).get("URLBlocklist", []))
@@ -607,7 +607,7 @@ def policies_ok(domains: list[str]) -> bool:
 def cmd_enforce() -> int:
     domains = load_domains()
     if not domains:
-        return 0  # нечего сторожить — полная тишина (невидимость)
+        return 0  # nothing to guard — full silence (invisibility)
     lift_punish_if_expired()
     killed = kill_bypass_processes()
     try:
@@ -619,8 +619,8 @@ def cmd_enforce() -> int:
     nft_ok = r.returncode == 0
     pol_ok = policies_ok(domains)
     if has and nft_ok and pol_ok:
-        return 0  # compliant — молчим, нас нет
-    # Атака/снос замечен — молча восстанавливаем, без диалогов.
+        return 0  # compliant — silent, we are not here
+    # Attack/removal detected — silently restore, no dialogs.
     try:
         unlock_files()
     except Exception:
@@ -631,10 +631,10 @@ def cmd_enforce() -> int:
         apply_browser_policies(domains)
         lock_files()
         n = note_tamper()
-        log(f"enforce: восстановлен блок {','.join(domains)} tamper10min={n} killed={killed}")
+        log(f"enforce: block restored {','.join(domains)} tamper10min={n} killed={killed}")
         if n >= 3 and not punish_active():
             engage_punish(15)
-            time.sleep(3)  # измотать цикл «снести-за-1-сек», сторожу не вредит
+            time.sleep(3)  # wear out the remove-in-1-sec loop, harmless to the guard
     except Exception as e:
         log(f"enforce FAILED: {e}")
         return 1
@@ -643,30 +643,30 @@ def cmd_enforce() -> int:
 
 def cmd_status() -> int:
     domains = load_domains()
-    print(f"Домены: {', '.join(domains) if domains else '— (не установлено)'}")
+    print(f"Domains: {', '.join(domains) if domains else '— (not installed)'}")
     try:
         has = MARK_BEGIN in open(HOSTS, encoding="utf-8").read()
     except OSError as e:
         has = f"ERR {e}"
     print(f"hosts: {'OK' if has is True else has}")
     r = run(["nft", "list", "table", "inet", "beton"])
-    print(f"nft inet beton: {'OK' if r.returncode == 0 else 'НЕТ'}")
+    print(f"nft inet beton: {'OK' if r.returncode == 0 else 'MISSING'}")
     r = run(["systemctl", "is-active", "beton-enforce.timer"])
     print(f"watchdog timer: {r.stdout.strip() or r.stderr.strip()}")
-    print(f"tamper за 10 мин: {tamper_count()}")
-    print(f"punish (QUIC-drop): {'АКТИВЕН' if punish_active() else 'нет'}")
-    print(f"allowlist процессов: {ALLOWLIST_PROCS_FILE}")
+    print(f"tamper last 10 min: {tamper_count()}")
+    print(f"punish (QUIC-drop): {'ACTIVE' if punish_active() else 'no'}")
+    print(f"allowlist file: {ALLOWLIST_PROCS_FILE}")
     return 0
 
 
 def cmd_revert() -> int:
     if not is_root():
-        print("Нужно sudo.")
+        print("sudo required.")
         return 2
     if is_final():
-        print("FINAL: машина финализирована. Снятие — только переустановкой ОС.")
+        print("FINAL: machine finalized. Removal only via OS reinstall.")
         return 4
-    print("ВНИМАНИЕ: revert существует ТОЛЬКО для тестов в VM. В финале его не будет.")
+    print("WARNING: revert exists ONLY for VM tests. Gone in the final.")
     unlock_files()
     base = read_hosts_without_beton()
     with open(HOSTS, "w", encoding="utf-8") as f:
@@ -690,21 +690,21 @@ def cmd_revert() -> int:
         except OSError:
             pass
     run(["systemctl", "daemon-reload"])
-    print("Откачено (тестовый режим).")
-    log("revert-for-testing выполнен")
+    print("Reverted (testing mode).")
+    log("revert-for-testing done")
     return 0
 
 
 def do_apply(domains: list[str]) -> None:
     os.makedirs(STATE_DIR, exist_ok=True)
-    # apply после прерванного предшественника: снять старые immutable, иначе EPERM
-    # (поймано в VM-матрице).
+    # apply after an interrupted predecessor: drop stale immutable flags or EPERM
+    # (caught in the VM matrix).
     try:
         unlock_files()
     except Exception:
         pass
     bdir = backup("pre-apply")
-    print(f"Бэкап: {bdir}")
+    print(f"Backup: {bdir}")
     with open(DOMAINS_FILE, "w", encoding="utf-8") as f:
         f.write("\n".join(domains) + "\n")
     ips = resolve_ips(domains)
@@ -714,7 +714,7 @@ def do_apply(domains: list[str]) -> None:
     install_self_and_watchdog()
     lock_files()
     log(f"apply: {','.join(domains)} backup={bdir}")
-    # Проверка что сторож реально держит
+    # Check the guard actually holds
     fails = []
     try:
         for d in domains:
@@ -728,48 +728,48 @@ def do_apply(domains: list[str]) -> None:
     except Exception:
         pass
     if fails:
-        print(f"WARN: эти имена не ушли в 0.0.0.0 через gethostbyname: {fails} (nft+политики всё равно режут, см. status)")
-    print("Готово. Забудь. Живи.")
-    print("Снять: только переустановка ОС (в MVP для тестов в VM есть revert-for-testing).")
+        print(f"WARN: these names did not resolve to 0.0.0.0 via gethostbyname: {fails} (nft+policies still cut them, see status)")
+    print("Done. Forget it. Live.")
+    print("Removal: OS reinstall only (MVP has revert-for-testing for VM tests).")
 
 
 def cmd_block(raw: list[str], assume_yes: bool, countdown: int = 10,
               breaks_half_internet: bool = False) -> int:
     if not is_root():
-        print("Нужно sudo: sudo ./beton block ...")
+        print("sudo required: sudo ./beton block ...")
         return 2
     try:
         domains = expand_domains(raw)
     except ValueError as e:
-        print(f"Ошибка: {e}")
+        print(f"Error: {e}")
         return 2
     dang = find_dangerous(domains)
     if dang and not breaks_half_internet:
-        print(f"СТОП: {', '.join(dang)} — общая инфра. Это убьет пол-интернета, а не один сайт.")
-        print("Если точно надо — добавь флаг --i-know-this-breaks-half-internet.")
-        print("Я ничего не тронул.")
+        print(f"STOP: {', '.join(dang)} — shared infra. This kills half the internet, not one site.")
+        print("If you really mean it — add --i-know-this-breaks-half-internet.")
+        print("I touched nothing.")
         return 3
-    print(f"Я закрою навсегда: {', '.join(domains)}")
-    print("Остальное не трону: sudo, обновления, файлы, другие сайты.")
-    print("Обход/снос будет молча убит и откачен. Сайт будет выглядеть мертвым.")
+    print(f"I will close forever: {', '.join(domains)}")
+    print("The rest I won't touch: sudo, updates, files, other sites.")
+    print("Bypass/removal attempts will be silently killed and rolled back. The site will look dead.")
     if not assume_yes:
-        print(f"Введи фразу: {FOREVER_PHRASE}")
+        print(f"Type the phrase: {FOREVER_PHRASE}")
         ans = input("> ").strip()
         if ans != FOREVER_PHRASE:
-            print("Отмена. Я ничего не тронул.")
+            print("Cancelled. I touched nothing.")
             return 1
-    print(f"Точка невозврата через {countdown}с. Ctrl+C — последний шанс.")
+    print(f"Point of no return in {countdown}s. Ctrl+C is the last chance.")
     try:
         for i in range(countdown, 0, -1):
             print(f"  {i}...", flush=True)
             time.sleep(1)
     except KeyboardInterrupt:
-        print("\nОтмена. Ничего не тронуто.")
+        print("\nCancelled. Nothing touched.")
         return 1
     try:
         do_apply(domains)
     except Exception as e:
-        print(f"ОШИБКА применения: {e}")
+        print(f"APPLY ERROR: {e}")
         return 1
     return 0
 
@@ -779,12 +779,12 @@ EBPF_MAX_PAT_LEN = 64
 
 
 def render_ebpf_patterns(bases: list[str], port: int = 443) -> str:
-    """Тот же формат, что l2/codegen.py. Паритет проверяется тестами.
-    Сборка и цепление — только в VM (см. l2/)."""
+    """Same format as l2/codegen.py. Parity covered by tests.
+    Build and attach — VM only (see l2/)."""
     if len(bases) > EBPF_MAX_PATTERNS:
-        raise ValueError(f"паттернов {len(bases)} > {EBPF_MAX_PATTERNS}: режь список")
+        raise ValueError(f"patterns {len(bases)} > {EBPF_MAX_PATTERNS}: cut the list")
     lines = [
-        "/* AUTOGENERATED by beton gen-ebpf — не править руками. */",
+        "/* AUTOGENERATED by beton gen-ebpf — do not edit. */",
         "#pragma once",
         "",
         f"#define BETON_NPATS {len(bases)}",
@@ -798,7 +798,7 @@ def render_ebpf_patterns(bases: list[str], port: int = 443) -> str:
     for p in bases:
         b = p.encode("ascii")
         if len(b) > EBPF_MAX_PAT_LEN:
-            raise ValueError(f"паттерн слишком длинный: {p}")
+            raise ValueError(f"pattern too long: {p}")
         lines.append(f"  {{ {len(b)}, {{{', '.join(str(x) for x in b)}}} }}, /* {p} */")
     lines += ["};", ""]
     return "\n".join(lines)
@@ -808,58 +808,58 @@ def cmd_gen_ebpf(raw: list[str], out: str, port: int = 443) -> int:
     try:
         domains = expand_domains(raw)
     except ValueError as e:
-        print(f"Ошибка: {e}")
+        print(f"Error: {e}")
         return 2
     bases = sorted({base_of(d) for d in domains})
     for p in bases:
         try:
             p.encode("ascii")
         except UnicodeEncodeError:
-            print(f"не-ascii база после нормализации: {p}")
+            print(f"non-ascii base after normalization: {p}")
             return 2
     try:
         text = render_ebpf_patterns(bases, port)
     except ValueError as e:
-        print(f"Ошибка: {e}")
+        print(f"Error: {e}")
         return 2
     with open(out, "w", encoding="utf-8") as f:
         f.write(text)
-    print(f"{len(bases)} паттернов порт {port} -> {out} (сборка и цепление — только в VM, см. l2/)")
+    print(f"{len(bases)} patterns port {port} -> {out} (build and attach — VM only, see l2/)")
     return 0
 
 
 def cmd_interactive() -> int:
     if not is_root():
-        print("Запусти с sudo, я сам всё сделаю: sudo ./beton")
-        print("Хочешь только посмотреть план без изменений: ./beton dry-run youtube.com")
+        print("Run with sudo, I do everything myself: sudo ./beton")
+        print("To only preview the plan without changes: ./beton dry-run youtube.com")
         return 2
-    print("== BETON: я сам всё сделаю, думать не надо ==")
-    raw = input("Какие сайты закрыть навсегда? (через пробел, например: youtube.com tiktok.com)\n> ").strip().split()
+    print("== BETON: I do everything myself, no thinking needed ==")
+    raw = input("Which sites to close forever? (space-separated, e.g.: youtube.com tiktok.com)\n> ").strip().split()
     if not raw:
-        print("Пусто — ничего не тронул.")
+        print("Empty — touched nothing.")
         return 1
     return cmd_block(raw, assume_yes=False)
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(prog="beton", description="невидимый сторож: закрывает сайты навсегда")
+    ap = argparse.ArgumentParser(prog="beton", description="invisible guard: closes sites forever")
     sub = ap.add_subparsers(dest="cmd")
-    p = sub.add_parser("block", help="закрыть навсегда")
+    p = sub.add_parser("block", help="close forever")
     p.add_argument("domains", nargs="+")
     p.add_argument("--yes-i-understand-this-is-forever", action="store_true")
     p.add_argument("--i-know-this-breaks-half-internet", action="store_true")
     p.add_argument("--countdown", type=int, default=10)
-    d = sub.add_parser("dry-run", help="показать план без изменений")
+    d = sub.add_parser("dry-run", help="show the plan without changes")
     d.add_argument("domains", nargs="+")
-    sub.add_parser("status", help="проверить держит ли")
-    sub.add_parser("enforce", help="молча восстановить (внутреннее)")
-    sub.add_parser("revert-for-testing", help="ОТКАТ ТОЛЬКО ДЛЯ VM-ТЕСТОВ")
-    sub.add_parser("interactive", help="режим одной команды")
-    g = sub.add_parser("gen-ebpf", help="сгенерировать patterns.h для L2 (без root, без изменений системы)")
+    sub.add_parser("status", help="check it holds")
+    sub.add_parser("enforce", help="silently restore (internal)")
+    sub.add_parser("revert-for-testing", help="ROLLBACK FOR VM TESTS ONLY")
+    sub.add_parser("interactive", help="single-command mode")
+    g = sub.add_parser("gen-ebpf", help="generate patterns.h for L2 (no root, no system changes)")
     g.add_argument("domains", nargs="+")
     g.add_argument("--out", default="patterns.h")
     g.add_argument("--port", type=int, default=443)
-    ap.add_argument("--version", action="store_true", help="версия и выход")
+    ap.add_argument("--version", action="store_true", help="print version and exit")
     a = ap.parse_args()
     if a.version:
         print(f"{APP} {VERSION}")
@@ -876,7 +876,7 @@ def main() -> int:
         return cmd_status()
     if a.cmd == "enforce":
         if not is_root():
-            print("Нужно sudo.")
+            print("sudo required.")
             return 2
         return cmd_enforce()
     if a.cmd == "revert-for-testing":

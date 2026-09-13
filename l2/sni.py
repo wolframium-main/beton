@@ -1,11 +1,11 @@
-"""L2: SNI-ядро. Чистый Python, без root. Та же логика ляжет в eBPF TC-фильтр.
+"""L2: SNI core. Pure Python, no root. The same logic goes into the eBPF TC filter.
 
-extract_sni: разбирает TLS ClientHello, возвращает server_name или None.
-is_blocked: решение рвать/пустить по списку базовых доменов.
+extract_sni: parses a TLS ClientHello, returns server_name or None.
+is_blocked: drop/accept verdict over the base-domain list.
 
-Честное ограничение: при ECH (Encrypted Client Hello) настоящее имя зашифровано,
-на проводе видно только внешнее (outer) SNI. Парсер возвращает то, что на проводе;
-невидимость ECH-цели для SNI-фильтра — фундаментальна, ее закрывают DNS/IP-слои.
+Honest limit: with ECH (Encrypted Client Hello) the real name is encrypted,
+only the outer SNI is visible on the wire. The parser returns what is on the wire;
+ECH-target invisibility to an SNI filter is fundamental, DNS/IP layers cover it.
 """
 from __future__ import annotations
 
@@ -75,7 +75,7 @@ def _parse(data: bytes) -> str | None:
                 p += 3
                 if p + nlen > end:
                     return None
-                if ntype == 0:  # host_name, берем первое
+                if ntype == 0:  # host_name, take the first
                     try:
                         return ed[p:p + nlen].decode("ascii").lower().strip().rstrip(".")
                     except UnicodeDecodeError:
@@ -92,7 +92,7 @@ def base_of_domain(d: str) -> str:
 
 
 def is_blocked(host: str | None, blocked_bases: set[str] | list[str]) -> bool:
-    """Рвать соединение, если host совпал с базой или ее поддоменом."""
+    """Drop the connection if host equals a base or its subdomain."""
     if not host:
         return False
     h = host.strip().lower().rstrip(".")

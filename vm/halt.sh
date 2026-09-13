@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# halt.sh — остановить VM.
+# halt.sh — stop the VM.
 set -uo pipefail
 VM_DIR="$(dirname "$0")"
 if [[ -f "$VM_DIR/qemu.pid" ]] && kill -0 "$(cat "$VM_DIR/qemu.pid")" 2>/dev/null; then
@@ -9,7 +9,7 @@ if [[ -f "$VM_DIR/qemu.pid" ]] && kill -0 "$(cat "$VM_DIR/qemu.pid")" 2>/dev/nul
     sleep 1
   done
   rm -f "$VM_DIR/qemu.pid"
-  echo "VM остановлена"
+  echo "VM stopped"
 else
-  echo "VM не запущена"
+  echo "VM not running"
 fi

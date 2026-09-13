@@ -1,4 +1,4 @@
-"""Тесты NFQUEUE-решения. Без root, без netfilterqueue. Запуск: python3 test_nfqueue.py"""
+"""NFQUEUE verdict tests. No root, no netfilterqueue. Run: python3 test_nfqueue.py"""
 import os
 import struct
 import sys
@@ -6,7 +6,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(__file__))
 import nfqueue
-from test_sni import build_hello  # переиспользуем конструктор hello
+from test_sni import build_hello  # reuse the hello constructor
 
 BASES = {"youtube.com"}
 

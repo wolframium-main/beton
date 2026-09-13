@@ -1,18 +1,18 @@
-/* beton_sni_tc — PROTOTYPE L2 для VM. На хосте не собирать и не цеплять.
+/* beton_sni_tc — L2 PROTOTYPE for VM. Do not build or attach on the host.
  *
- * TC egress: смотрит TCP->BETON_PORT, извлекает SNI из ClientHello и сравнивает
- * по границам домена (точное имя или поддомен; notfoo.com не матчится).
- * Совпало -> SHOT, иначе OK.
- * Переименование бинаря не помогает: давится соединение, а не процесс.
+ * TC egress: watches TCP->BETON_PORT, extracts SNI from ClientHello and compares
+ * on domain boundaries (exact name or subdomain; notfoo.com does NOT match).
+ * Match -> SHOT, else OK.
+ * Renaming the binary does not help: the connection is squeezed, not the process.
  *
- * Ограничения (честно):
- * - ECH шифрует настоящее SNI: видим только outer-имя. ECH-цель ловится
- *   DNS/IP-слоями, а не этим фильтром.
- * - Фрагментация/сегментация: ClientHello обычно в первом сегменте; разрезанный
- *   hello может проскочить — принят как известный зазор, чинится NFQUEUE-фолбэком.
- * - Верифаер: все циклы ограничены константами (BETON_NPATS/MAX_PAT_LEN/SCAN).
+ * Limits (honestly):
+ * - ECH encrypts the real SNI: we see only the outer name. ECH targets are caught
+ *   by the DNS/IP layers, not by this filter.
+ * - Fragmentation/segmentation: ClientHello is usually in the first segment; a split
+ *   hello may slip through — accepted as a known gap, fixed by the NFQUEUE fallback.
+ * - Verifier: all loops bounded by constants (BETON_NPATS/MAX_PAT_LEN/SCAN).
  *
- * Сборка и цепление — только в VM (см. build.sh, README.md).
+ * Build and attach — VM only (see build.sh, README.md).
  */
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
@@ -31,7 +31,7 @@
 
 #define SCAN_BYTES 1024
 
-/* Безопасное чтение байта/u16 с проверкой границ. */
+/* Bounds-checked u8/u16 reads. */
 static __always_inline int pkt_u8(struct __sk_buff *skb, __u32 off, __u8 *out)
 {
 	__u8 v = 0;
@@ -53,8 +53,8 @@ static __always_inline int pkt_u16(struct __sk_buff *skb, __u32 off, __u16 *out)
 #define BETON_MAX_HOST 64
 #define BETON_MAX_EXTS 32
 
-/* Извлечь первое host_name из SNI в out (lowercase). Вернуть длину или -1.
- * Границы: только [base, end). ECH: вернёт outer-имя (честный зазор).
+/* Extract the first host_name from SNI into out (lowercase). Return length or -1.
+ * Bounds: [base, end) only. ECH: returns the outer name (honest gap).
  */
 static __always_inline int parse_sni(struct __sk_buff *skb, __u32 base,
 				     __u32 end, __u8 *out)
@@ -87,7 +87,7 @@ static __always_inline int parse_sni(struct __sk_buff *skb, __u32 base,
 	ext_end = o + v16;
 	if (ext_end < o)
 		return -1;
-	/* ext_end может уходить за окно: итерируем до min(ext_end, end) */
+	/* ext_end may run past the window: iterate to min(ext_end, end) */
 	for (i = 0; i < BETON_MAX_EXTS; i++) {
 		__u16 etype, elen;
 		__u32 eo, win_end;
@@ -101,8 +101,8 @@ static __always_inline int parse_sni(struct __sk_buff *skb, __u32 base,
 		if (eo < o || eo > ext_end)
 			return -1;
 		if (eo > end) {
-			/* Расширение разрезано окном: SNI в нём — честный проскок,
-			 * чужое — просто выходим. */
+			/* Extension cut by the window: SNI inside means an honest miss,
+			 * anything else means just stop. */
 			if (etype == 0x0000)
 				return -1;
 			break;
@@ -152,7 +152,7 @@ static __always_inline int parse_sni(struct __sk_buff *skb, __u32 base,
 	return -1;
 }
 
-/* Точное совпадение или поддомен (.base). notfoo.com НЕ матчится. */
+/* Exact match or subdomain (.base). notfoo.com does NOT match. */
 static __always_inline int host_matches(const __u8 *host, int hlen,
 					const struct beton_pat *pat)
 {
@@ -209,7 +209,7 @@ int beton_sni(struct __sk_buff *skb)
 	if (tcp_off > ip_off + 60)
 		return TC_ACT_OK;
 
-	/* dport: байты tcp_off+2..3 */
+	/* dport: bytes tcp_off+2..3 */
 	{
 		__u8 hi = 0, lo = 0;
 		if (pkt_u8(skb, tcp_off + 2, &hi) < 0 || pkt_u8(skb, tcp_off + 3, &lo) < 0)
@@ -227,7 +227,7 @@ int beton_sni(struct __sk_buff *skb)
 	if (tail > (sizeof(struct ethhdr) + 1500))
 		tail = sizeof(struct ethhdr) + 1500;
 
-	/* Извлекаем SNI и сравниваем по границам домена. */
+	/* Extract SNI and compare on domain boundaries. */
 	{
 		__u8 host[BETON_MAX_HOST] = {0};
 		int hlen = parse_sni(skb, pay_off, tail, host);
