@@ -449,7 +449,7 @@ def is_allowed(name: str, exe: str, bare: set[str], pinned: dict[str, set[str]])
 
 # System locations (pacman-managed, root-owned): never kill targets there.
 # Rationale: routine package updates refresh mtimes, which would turn your own
-# VPN helpers (e.g. Amnezia's bundled openvpn in /opt) into false kills.
+# VPN helpers (e.g. a bundled openvpn in /opt) into false kills.
 # The killer hunts user-dropped bypass binaries (/tmp, /home, ...).
 # A deliberate `sudo pacman -S tor` is beyond L1 scope (deliberate root wins L1).
 SYSTEM_PREFIXES = ("/usr/", "/opt/")
@@ -495,7 +495,7 @@ def iter_bypass_candidates() -> list[tuple[int, str]]:
 
 
 def snapshot_allowlist() -> list[str]:
-    """Record currently running bypass-named tools (e.g. Amnezia's bundled
+    """Record currently running bypass-named tools (e.g. a VPN\'s bundled
     openvpn) as pinned name:path entries, so later package updates that refresh
     exe mtimes do not turn your own VPN into a kill target."""
     found: dict[str, set[str]] = {}
