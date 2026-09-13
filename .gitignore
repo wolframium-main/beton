@@ -13,3 +13,4 @@ l2/patterns.h
 /tmp/
 *.pyc
 vm/qemu.pid
+vm/lab-cert.pem

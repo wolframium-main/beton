@@ -60,6 +60,8 @@ systemctl enable sshd NetworkManager serial-getty@ttyS0 >/dev/null
 mkdir -p /root/.ssh && chmod 700 /root/.ssh
 # ключ положит хост-скрипт; разрешаем key-auth
 sed -i 's/^#*PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
+# Пароль тестовой VM. Одноразовый стенд за NAT без проброса портов наружу;
+# в проде этого файла нет — там пароль задаёт владелец вручную.
 echo "root:beton" | chpasswd
 bootctl install --esp-path=/boot >/dev/null
 cat > /boot/loader/loader.conf <<'LOADER'

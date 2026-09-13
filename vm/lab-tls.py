@@ -1,6 +1,8 @@
 """lab-tls.py — карманный HTTPS для L2-замеров. Один сервер, любое SNI принимает,
 отвечает 200 OK с именем из SNI (прочитано грубым поиском hostname в ClientHello).
-Слушает 0.0.0.0:18443 (без root). Сертификат: lab-cert.pem рядом (CN=fine.test).
+Слушает 0.0.0.0:18443 (без root). Сертификат lab-cert.pem рядом НЕ коммитится
+(приватный ключ!); регенерация:
+  openssl req -x509 -newkey rsa:2048 -nodes -keyout lab-cert.pem -out lab-cert.pem -days 2 -subj "/CN=fine.test"
 
 Гость: curl -k https://megablock.test:18443/ --resolve megablock.test:18443:10.0.2.2
 """
