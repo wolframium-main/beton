@@ -1,4 +1,4 @@
-# beton 0.1.1 — the invisible guard dog
+# beton — the invisible guard dog
 
 **beton permanently blocks websites you choose. Removing the block requires
 reinstalling the OS — that is the design, not a bug.**
@@ -31,7 +31,7 @@ sudo ./beton status       # check that it holds
 ## Your VPN stays alive
 
 The killer only hunts user-dropped bypass binaries (`/tmp`, `/home`, …).
-System locations (`/usr`, `/opt` — e.g. AmneziaVPN and its bundled helpers)
+System locations (`/usr`, `/opt` — where VPN clients and their helpers live)
 are never kill targets, so package updates cannot turn your own VPN into
 collateral damage. At setup, beton snapshots your running tools into an
 allowlist (`name:/path` lines in `/var/lib/beton/allowlist-procs.txt`).

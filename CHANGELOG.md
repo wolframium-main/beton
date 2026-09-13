@@ -8,8 +8,8 @@
   FORTRESS statuses updated to done
 
 ## 0.1.2 (2026-09-13)
-- VPN safety: killer ignores system paths (`/usr`, `/opt`), so bundled helpers
-  like AmneziaVPN's openvpn survive package updates; path-pinned allowlist
+- VPN safety: killer ignores system paths (`/usr`, `/opt`), so VPN clients
+  and their bundled helpers survive package updates; path-pinned allowlist
   (`name:/path`) with auto-snapshot at setup; rename-to-allowlisted-name attack
   still killed (path must match)
 
