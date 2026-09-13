@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.2 (2026-09-13)
+- VPN safety: killer ignores system paths (`/usr`, `/opt`), so bundled helpers
+  like AmneziaVPN's openvpn survive package updates; path-pinned allowlist
+  (`name:/path`) with auto-snapshot at setup; rename-to-allowlisted-name attack
+  still killed (path must match)
+
 ## 0.1.1 (2026-09-13)
 - Repository switched to English (docs + CLI)
 - Chromium policy fix: Chrome 153 only honors bare-hostname URLBlocklist entries

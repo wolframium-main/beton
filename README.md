@@ -28,6 +28,14 @@ sudo ./beton status       # check that it holds
 5. Escalation ladder: silent restore → persistence → temporary QUIC punishment
 6. L2 eBPF SNI filter + L3 finalization ceremony (Secure Boot, signing key destroyed)
 
+## Your VPN stays alive
+
+The killer only hunts user-dropped bypass binaries (`/tmp`, `/home`, …).
+System locations (`/usr`, `/opt` — e.g. AmneziaVPN and its bundled helpers)
+are never kill targets, so package updates cannot turn your own VPN into
+collateral damage. At setup, beton snapshots your running tools into an
+allowlist (`name:/path` lines in `/var/lib/beton/allowlist-procs.txt`).
+
 ## Rollback
 
 - Before finalization (VM tests): `sudo ./beton revert-for-testing`

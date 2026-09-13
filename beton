@@ -28,7 +28,7 @@ import sys
 import time
 
 APP = "beton"
-VERSION = "0.1.1"
+VERSION = "0.1.2"
 HOSTS = "/etc/hosts"
 STATE_DIR = "/var/lib/beton"
 DOMAINS_FILE = os.path.join(STATE_DIR, "domains.txt")
@@ -416,20 +416,60 @@ def install_time() -> float:
         return 0.0
 
 
-def load_allowlist() -> set[str]:
+def load_allowlist() -> tuple[set[str], dict[str, set[str]]]:
+    """(bare names, pinned name->exe paths). Line format: `name` or `name:/path/to/exe`.
+    Pinned entries survive package updates; bare names match any path (legacy)."""
+    bare: set[str] = set()
+    pinned: dict[str, set[str]] = {}
     try:
         with open(ALLOWLIST_PROCS_FILE, encoding="utf-8") as f:
-            return {l.strip() for l in f if l.strip() and not l.startswith("#")}
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if ":" in line:
+                    name, path = line.split(":", 1)
+                    pinned.setdefault(name.strip(), set()).add(path.strip())
+                else:
+                    bare.add(line)
     except OSError:
-        return set()
+        pass
+    return bare, pinned
+
+
+def exe_of(pid: str) -> str:
+    try:
+        return os.path.realpath(f"/proc/{pid}/exe")
+    except OSError:
+        return ""
+
+
+def is_allowed(name: str, exe: str, bare: set[str], pinned: dict[str, set[str]]) -> bool:
+    if name in bare:
+        return True
+    return bool(exe) and exe in pinned.get(name, set())
+
+
+# System locations (pacman-managed, root-owned): never kill targets there.
+# Rationale: routine package updates refresh mtimes, which would turn your own
+# VPN helpers (e.g. Amnezia's bundled openvpn in /opt) into false kills.
+# The killer hunts user-dropped bypass binaries (/tmp, /home, ...).
+# A deliberate `sudo pacman -S tor` is beyond L1 scope (deliberate root wins L1).
+SYSTEM_PREFIXES = ("/usr/", "/opt/")
+
+
+def is_system_path(exe: str) -> bool:
+    return bool(exe) and exe.startswith(SYSTEM_PREFIXES)
 
 
 def iter_bypass_candidates() -> list[tuple[int, str]]:
-    """Bypass processes installed AFTER setup. Pre-existing work tools untouched."""
+    """Bypass processes installed AFTER setup. Pre-existing work tools untouched.
+    Renaming a bypass binary to an allowlisted NAME does not help: the exe PATH
+    must match the pinned path recorded at setup."""
     its = install_time()
     if not its:
         return []
-    allow = load_allowlist()
+    bare, pinned = load_allowlist()
     out: list[tuple[int, str]] = []
     try:
         pids = [p for p in os.listdir("/proc") if p.isdigit()]
@@ -441,7 +481,12 @@ def iter_bypass_candidates() -> list[tuple[int, str]]:
                 name = f.read().strip()
         except OSError:
             continue
-        if name not in BYPASS_PROC_NAMES or name in allow:
+        if name not in BYPASS_PROC_NAMES:
+            continue
+        exe = exe_of(pid)
+        if is_allowed(name, exe, bare, pinned):
+            continue
+        if is_system_path(exe):
             continue
         try:
             exe_mtime = os.stat(f"/proc/{pid}/exe").st_mtime
@@ -450,6 +495,35 @@ def iter_bypass_candidates() -> list[tuple[int, str]]:
         if exe_mtime > its:
             out.append((int(pid), name))
     return out
+
+
+def snapshot_allowlist() -> list[str]:
+    """Record currently running bypass-named tools (e.g. Amnezia's bundled
+    openvpn) as pinned name:path entries, so later package updates that refresh
+    exe mtimes do not turn your own VPN into a kill target."""
+    found: dict[str, set[str]] = {}
+    try:
+        pids = [p for p in os.listdir("/proc") if p.isdigit()]
+    except OSError:
+        return []
+    for pid in pids:
+        try:
+            with open(f"/proc/{pid}/comm", encoding="utf-8") as f:
+                name = f.read().strip()
+        except OSError:
+            continue
+        if name not in BYPASS_PROC_NAMES:
+            continue
+        exe = exe_of(pid)
+        if exe:
+            found.setdefault(name, set()).add(exe)
+    lines = sorted(f"{n}:{p}" for n, paths in found.items() for p in sorted(paths))
+    if lines:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        with open(ALLOWLIST_PROCS_FILE, "w", encoding="utf-8") as f:
+            f.write("# auto-snapshot at setup: your tools stay alive\n")
+            f.write("\n".join(lines) + "\n")
+    return lines
 
 
 def kill_bypass_processes() -> list[tuple[int, str]]:
@@ -705,6 +779,9 @@ def do_apply(domains: list[str]) -> None:
         pass
     bdir = backup("pre-apply")
     print(f"Backup: {bdir}")
+    kept = snapshot_allowlist()
+    if kept:
+        print(f"Tools that stay alive: {', '.join(kept)}")
     with open(DOMAINS_FILE, "w", encoding="utf-8") as f:
         f.write("\n".join(domains) + "\n")
     ips = resolve_ips(domains)

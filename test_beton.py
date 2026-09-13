@@ -173,5 +173,36 @@ class TestPoliciesOk(unittest.TestCase):
             finally:
                 M.CHROMIUM_POLICY_DIRS, M.FIREFOX_POLICIES = old_c, old_f
 
+class TestAllowlist(unittest.TestCase):
+    def test_is_allowed(self):
+        self.assertTrue(M.is_allowed("tor", "/tmp/tor", {"tor"}, {}))
+        self.assertTrue(M.is_allowed("openvpn", "/opt/AmneziaVPN/bin/openvpn", set(), {"openvpn": {"/opt/AmneziaVPN/bin/openvpn"}}))
+        # rename attack: same name, foreign path -> NOT allowed
+        self.assertFalse(M.is_allowed("openvpn", "/tmp/openvpn", set(), {"openvpn": {"/opt/AmneziaVPN/bin/openvpn"}}))
+        self.assertFalse(M.is_allowed("tor", "/usr/bin/tor", set(), {}))
+        self.assertFalse(M.is_allowed("tor", "", set(), {"tor": {"/usr/bin/tor"}}))
+
+    def test_load_parsing(self):
+        import tempfile
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
+            f.write("# comment\n\nopenvpn:/opt/AmneziaVPN/bin/openvpn\ntor\n")
+            path = f.name
+        old = M.ALLOWLIST_PROCS_FILE
+        M.ALLOWLIST_PROCS_FILE = path
+        try:
+            bare, pinned = M.load_allowlist()
+            self.assertEqual(bare, {"tor"})
+            self.assertEqual(pinned, {"openvpn": {"/opt/AmneziaVPN/bin/openvpn"}})
+        finally:
+            M.ALLOWLIST_PROCS_FILE = old
+            os.unlink(path)
+class TestSystemImmunity(unittest.TestCase):
+    def test_system_paths_immune(self):
+        self.assertTrue(M.is_system_path("/opt/AmneziaVPN/bin/openvpn"))
+        self.assertTrue(M.is_system_path("/usr/bin/tor"))
+        self.assertFalse(M.is_system_path("/tmp/tor"))
+        self.assertFalse(M.is_system_path("/home/u/Downloads/tor"))
+        self.assertFalse(M.is_system_path(""))
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
