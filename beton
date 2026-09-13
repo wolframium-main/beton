@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""beton — the invisible guard dog. One command blocks sites forever (MVP).
+"""beton — the invisible guard dog. One command blocks sites forever.
 
 Principle: in normal life it does not exist. It kills only attacks on the block.
-Safe MVP: everything is reversible via `beton revert-for-testing`.
-Final irreversibility (verity+SecureBoot+key destruction) — Stage 2 only
-via the --final-irreversible flag, locked in the MVP.
+Before finalization everything is reversible via `beton revert-for-testing`.
+Final irreversibility (SecureBoot + destroyed signing key) comes only from
+the `l3/finalize.sh` ceremony — after it, removal means OS reinstall.
 
 Simple usage:
   sudo ./beton                      # interactive: asks for sites, does everything itself
@@ -32,7 +32,6 @@ VERSION = "0.1.2"
 HOSTS = "/etc/hosts"
 STATE_DIR = "/var/lib/beton"
 DOMAINS_FILE = os.path.join(STATE_DIR, "domains.txt")
-BACKUP_ROOT = STATE_DIR
 NFT_RULES = "/etc/beton/rules.nft"
 BIN_DST = "/usr/local/bin/beton"
 SERVICE = "/etc/systemd/system/beton-enforce.service"
@@ -106,7 +105,7 @@ def is_root() -> bool:
     return os.geteuid() == 0
 
 
-def run(cmd: list[str], check: bool = False) -> subprocess.CompletedProcess:
+def run(cmd: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, capture_output=True, text=True)
 
 
@@ -268,7 +267,7 @@ def read_hosts_without_beton() -> str:
 
 def backup(tag: str) -> str:
     ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    dst = os.path.join(BACKUP_ROOT, f"backup-{ts}-{tag}")
+    dst = os.path.join(STATE_DIR, f"backup-{ts}-{tag}")
     os.makedirs(dst, exist_ok=True)
     for src in (HOSTS, NFT_RULES, *FIREFOX_POLICIES):
         if os.path.isfile(src):

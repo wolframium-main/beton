@@ -12,7 +12,7 @@ filesystem → root alone is no longer enough.
 - [x] Ladder: restore → 3 removals/10min → 15min QUIC-drop with auto-lift
 - [x] `enforce` also verifies browser policies (post-setup browsers covered)
 
-## Level 2 — squeeze the connection, not the process name [CORE DONE, ATTACH IN VM]
+## Level 2 — squeeze the connection, not the process name [DONE, MEASURED IN VM]
 - [x] Reference `l2/sni.py` + 12 tests (ClientHello parser, verdict, ECH honesty)
 - [x] Carrier 1: `l2/beton_sni_tc.c` (TC egress, SHOT on pattern) + codegen + build.sh
 - [x] Carrier 2: `l2/nfqueue.py` (userspace fallback, same core) + 6 verdict tests
@@ -20,7 +20,7 @@ filesystem → root alone is no longer enough.
 - [x] VM: both carriers measured, substring matcher replaced with real SNI parsing
 - No TLS-MITM: breaks trust, exposes the guard, needs a CA in the store.
 
-## Level 3 — anchor outside the mutable filesystem [CEREMONY CODE DONE, RUN IN VM]
+## Level 3 — anchor outside the mutable filesystem [DONE, CEREMONY RUN IN VM]
 - [x] `l3/gate.py`: 6 checks (root/VM/UEFI+SB/ALLOW/MATRIX/block), 6 tests
 - [x] `l3/finalize.sh`: bundle→fresh key→UKI→sbsign→sbverify→enroll→shred→FINAL
 - [x] FINAL flag in `beton`: post-final `revert` answers code 4 (tested)
@@ -34,6 +34,6 @@ filesystem → root alone is no longer enough.
   and that is a different product.
 - Physical BIOS battery reset — the legal exit via reinstall.
 
-## Order of work
-L1 done → VM matrix with hack-time measurement → L2 prototype in VM →
-L3 only after a green L2 matrix.
+## Order of work (completed)
+L1 → VM matrix with hack-time measurement → L2 prototype in VM →
+L3 after the green L2 matrix. Evidence: vm/RESULTS.md.

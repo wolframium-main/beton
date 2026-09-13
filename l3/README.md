@@ -7,7 +7,7 @@ without a signature.
 ## Contents
 - `gate.py` — 6 preflight checks (root, VM, UEFI+SecureBoot, ALLOW_FINAL,
   VM_MATRIX_OK, installed block). Read-only. Red on the host — by design.
-- `test_gate.py` — 5 gate tests (6 with Setup-Mode parsing).
+- `test_gate.py` — 6 gate tests.
 - `finalize.sh` — the ceremony itself (VM, root, `--i-am-sure`): policy bundle →
   fresh key → UKI → sbsign → sbverify → enroll → `shred -u` of the keys → FINAL.
 - Early restore: `mkinitcpio-hook-beton` + `mkinitcpio-install-beton` +

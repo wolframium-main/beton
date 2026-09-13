@@ -137,14 +137,22 @@ class TestFinalFlag(unittest.TestCase):
         self.assertFalse(M.is_final())
 
     def test_revert_refuses_when_final(self):
-        real = M.is_final
+        real_final, real_root = M.is_final, M.is_root
         M.is_final = lambda: True
+        M.is_root = lambda: True
         try:
-            # without root we hit the sudo check before the flag; with root it would be code 4.
-            # Here we only check the flag is readable by the predicate.
             self.assertTrue(M.is_final())
+            self.assertEqual(M.cmd_revert(), 4)
         finally:
-            M.is_final = real
+            M.is_final, M.is_root = real_final, real_root
+
+    def test_revert_needs_root(self):
+        real_root = M.is_root
+        M.is_root = lambda: False
+        try:
+            self.assertEqual(M.cmd_revert(), 2)
+        finally:
+            M.is_root = real_root
 
 
 class TestPoliciesOk(unittest.TestCase):
