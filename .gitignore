@@ -10,7 +10,6 @@ __pycache__/
 l2/__pycache__/
 l3/__pycache__/
 l2/patterns.h
-/tmp/
 *.pyc
 vm/qemu.pid
 vm/lab-cert.pem

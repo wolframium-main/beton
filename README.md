@@ -45,7 +45,7 @@ allowlist (`name:/path` lines in `/var/lib/beton/allowlist-procs.txt`).
 
 A second device, a brand-new mirror with a new domain+IP, or a physical BIOS
 reset are outside one PC's perimeter. ECH hides the real SNI (DNS/IP layers
-catch it instead). Details: FORTRESS.md, STAGE2.md, l2/README.md, l3/README.md.
+catch it instead). Details: FORTRESS.md, l2/README.md, l3/README.md.
 
 ## Layout
 
